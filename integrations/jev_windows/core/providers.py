@@ -18,6 +18,8 @@ TYPESAFE_BASE = "https://api.typesafe.ai"
 
 JEV_ENV = "GOUTOU_JEV_API_KEY"    # 本项目独立配置，不读取上游安装的密钥
 LLM_ENV = "GOUTOU_LLM_API_KEY"
+DEEPSEEK_STRATEGY_ENV = "GOUTOU_DEEPSEEK_STRATEGY_KEY"
+OCR_ENV = "GOUTOU_OCR_API_KEY"
 # 本项目不读取上游应用可能留下的环境变量。
 LEGACY = {}
 
@@ -56,7 +58,7 @@ CUSTOM = ("custom_openai", "custom_anthropic")
 # 起草时认思考开关的来源，设置页那句提示照着这里写
 THINKING = ("DeepSeek", "OpenRouter", "Anthropic", "Gemini")
 # 所有可能存 key 的环境变量，脱敏时一次全过一遍（jev_client.redact_secrets）
-ENV_VARS = sorted({JEV_ENV, LLM_ENV, *LEGACY.values()})
+ENV_VARS = sorted({JEV_ENV, LLM_ENV, DEEPSEEK_STRATEGY_ENV, OCR_ENV, *LEGACY.values()})
 
 
 if __name__ == "__main__":
@@ -70,6 +72,6 @@ if __name__ == "__main__":
     assert DRAFT_PROVIDERS["deepseek"].extra(False) == {"thinking": {"type": "disabled"}}
     assert DRAFT_PROVIDERS["openrouter"].extra(True) == {"reasoning": {"enabled": True}}
     assert DRAFT_PROVIDERS["moonshot"].extra(True) == {}
-    # 全程只有两把 key，脱敏还得管老名字
-    assert ENV_VARS == ["GOUTOU_JEV_API_KEY", "GOUTOU_LLM_API_KEY"]
+    assert ENV_VARS == ["GOUTOU_DEEPSEEK_STRATEGY_KEY", "GOUTOU_JEV_API_KEY",
+                        "GOUTOU_LLM_API_KEY", "GOUTOU_OCR_API_KEY"]
     print("providers ok")

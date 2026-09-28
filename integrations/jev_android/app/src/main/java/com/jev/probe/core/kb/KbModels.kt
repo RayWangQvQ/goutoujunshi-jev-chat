@@ -33,6 +33,8 @@ data class Contact(
     val apps: List<String> = emptyList(),
     val relationship: String = "",
     val notes: String = "",
+    val stage: String = "未填写",
+    val goal: String = "自然接话",
     /** Reserved for the (deferred) auto-summary; never written in v1.3. */
     val autoSummary: String = "",
     val updatedAt: Long = System.currentTimeMillis()
@@ -54,7 +56,8 @@ data class ChatContext(
     /** True when there is nothing extra to inject (then no field is sent at all). */
     fun isEmpty(): Boolean = history.isEmpty() && notes.isEmpty() &&
         (contact == null || (contact.relationship.isBlank() &&
-            contact.notes.isBlank() && contact.autoSummary.isBlank()))
+            contact.notes.isBlank() && contact.autoSummary.isBlank() &&
+            contact.stage == "未填写" && contact.goal == "自然接话"))
 
     /**
      * The `background` string injected into Jev's state and the reply prompt:
@@ -72,6 +75,7 @@ data class ChatContext(
         contact?.let { c ->
             val rel = c.relationship.trim()
             if (rel.isNotEmpty()) sb.append("关系：").append(rel).append('\n')
+            sb.append("关系阶段：").append(c.stage).append("；本轮目标：").append(c.goal).append('\n')
             if (c.notes.isNotBlank()) sb.append("关于").append(c.name).append("：")
                 .append(c.notes.trim()).append('\n')
             if (c.autoSummary.isNotBlank()) sb.append("过往摘要：")

@@ -17,16 +17,19 @@ from app import settings, update, worker
 from app.capture import find_wechat_hwnd
 from app.fill import fill
 from app.overlay import Overlay
+from app.review import ReviewDialog
 from app.version import VERSION
 from core.engine import analyze
+from core.experience import details as generate_details, explain as explain_candidate, rewrite as rewrite_candidates
 
 # {会话名: {history, result, rev, target, senders}}：每个会话各自的上下文、上次结果和版本号，互不串味
 # history 里是 [(who, text, name)]，engine 只认 her/me，name 是群里的发言人（单聊/自己说的是 None）；
 # 只是缓冲区，实际喂模型几条由设置里的「参考上下文」决定
 # senders：这个群里发过言的人，去重、最近的排最前；target：用户挑的回复对象（None = 跟着最近那个走）
 chats = {}
-state = {"area": None, "busy": False, "rerun": None, "hwnd": None, "chat": ""}
+state = {"area": None, "busy": False, "rerun": None, "hwnd": None, "chat": "", "reviewing": False}
 results = queue.Queue()
+extras = queue.Queue()
 update_result = queue.Queue()  # 独立小队列，别跟 results 的 (kind, r, title, revision) 形状搅在一起
 
 
@@ -106,18 +109,37 @@ def on_toggle_capture(on):
     capture_on.set()
 
 
+def on_settings_saved():
+    """Refresh the child so newly saved OCR credentials are read immediately."""
+    global child
+    if child is None:
+        return
+    child.terminate()
+    child.join(timeout=3)
+    state["area"] = None
+    for chat in chats.values():
+        chat["rev"] += 1
+    ov.invalidate_replies()
+    child = spawn_worker()
+    ov.set_status("设置已保存；识图服务已重新载入", "success")
+
+
 def analyze_bg(msgs, title, revision, reply_to=None):
     """后台线程只跑网络调用，结果丢队列；UI 只在主线程的 tick 里动（Qt 不能跨线程碰）。"""
     try:
-        results.put(("ok", analyze(msgs, settings.relationship(), context=settings.context(),
+        result = analyze(msgs, settings.profile_context(title), context=settings.context(),
                                    model=settings.draft_model() or None,
                                    provider=settings.draft_provider(),
                                    base_url=settings.draft_base_url() or None,
                                    reply_to=reply_to, style=settings.style(),
                                    thinking=settings.thinking(),
                                    jev_provider=settings.jev_provider(),
-                                   jev_model=settings.jev_model() or None),
-                     title, revision))
+                                   jev_model=settings.jev_model() or None,
+                                   strategy_provider=settings.strategy_provider(),
+                                   strategy_model=settings.strategy_model(),
+                                   strategy_key=settings.strategy_key())
+        result["reviewed_messages"] = msgs
+        results.put(("ok", result, title, revision))
     except Exception as e:
         results.put(("err", f"分析失败: {e}", title, revision))
 
@@ -130,7 +152,22 @@ def check_update_bg():
 
 
 def start_analyze(title, msgs):
-    if not settings.has_jev_key():
+    if state["reviewing"] or state["busy"]:
+        return
+    state["reviewing"] = True
+    revision = chat_of(title)["rev"]
+    try:
+        dialog = ReviewDialog(title, msgs, ov.win)
+        if not dialog.exec():
+            ov.set_status("已取消本轮分析")
+            return
+        if revision != chat_of(title)["rev"] or state["chat"] != title:
+            ov.set_status("会话内容已变化，请重新核对后分析", "warning")
+            return
+        msgs = dialog.messages
+    finally:
+        state["reviewing"] = False
+    if not settings.has_strategy_key():
         ov.set_status("请先在设置中配置模型", "warning")
         return
     if not settings.has_llm_key():
@@ -141,6 +178,46 @@ def start_analyze(title, msgs):
     reply_to = target_of(title) if settings.reply_target() else None  # 开关关着就是今天的行为
     threading.Thread(target=analyze_bg, args=(msgs, title, chat_of(title)["rev"], reply_to),
                      daemon=True).start()
+
+
+def manual_analyze():
+    title = ov.current_chat() or state["chat"]
+    messages = list(chat_of(title)["history"]) if title else []
+    if not messages or title != state["chat"]:
+        ov.set_status("请先打开并读取要分析的会话", "warning")
+        return
+    start_analyze(title, messages)
+
+
+def _extra_bg(kind, title, revision, result, index=None):
+    try:
+        kwargs = dict(provider=settings.draft_provider(), model=settings.draft_model(),
+                      key=settings.llm_key(), base_url=settings.draft_base_url() or None)
+        messages = result["reviewed_messages"]
+        if kind == "details":
+            payload = generate_details(messages, settings.profile_context(title), result, **kwargs)
+        elif kind == "explain":
+            payload = explain_candidate(messages, settings.profile_context(title), result, index, **kwargs)
+        else:
+            payload = rewrite_candidates(messages, result, **kwargs)
+        extras.put((kind, payload, title, revision))
+    except Exception as exc:
+        extras.put(("error", str(exc)[:180], title, revision))
+
+
+def _on_extra(kind, index=None):
+    title = ov.current_chat()
+    chat = chat_of(title) if title else None
+    result = chat["result"] if chat else None
+    if not result or title != state["chat"] or not result.get("reviewed_messages"):
+        ov.set_status("请先核对并分析当前会话", "warning")
+        return
+    if kind == "rewrite" and not result.get("candidates"):
+        ov.set_status("当前没有可改写的候选", "warning")
+        return
+    ov.set_status("正在整理分析理由…" if kind == "explain" else
+                  "正在整理详细分析…" if kind == "details" else "正在按你的原话调整口吻…", "busy")
+    threading.Thread(target=_extra_bg, args=(kind, title, chat["rev"], result, index), daemon=True).start()
 
 
 def on_target_change(title, name):
@@ -217,7 +294,9 @@ def drain():
         ov.set_targets(title, chat["senders"], target_of(title))  # 显不显示这一行由悬浮窗按开关决定
         if new[-1][0] == "her":  # 只有对方最新说话才值得分析
             msgs = list(chat["history"])
-            if state["busy"]:
+            if not settings.auto_analyze():
+                ov.set_status("已读取新消息，点“核对原文并分析”")
+            elif state["busy"]:
                 state["rerun"] = (title, msgs)
                 ov.set_busy(True)
             else:
@@ -234,6 +313,26 @@ def tick():
         while not update_result.empty():
             latest, url = update_result.get()
             ov.set_update(latest, url)
+        while not extras.empty():
+            kind, payload, title, revision = extras.get()
+            if title != state["chat"] or title != ov.current_chat() or revision != chat_of(title)["rev"]:
+                continue
+            if kind == "error":
+                ov.set_status("操作失败：" + payload, "warning")
+            elif kind == "details":
+                ov.show_details(payload)
+                ov.set_status("详细分析已生成", "success")
+            elif kind == "explain":
+                ov.show_details(payload, "回复理由与代价")
+                ov.set_status("回复理由已生成", "success")
+            else:
+                result = chat_of(title)["result"]
+                if result:
+                    candidates, scores = payload
+                    updated = {**result, "candidates": candidates, "scores": scores,
+                               "best_index": max(range(len(scores)), key=scores.__getitem__) if scores else 0}
+                    chat_of(title)["result"] = updated
+                    ov.show(updated)
         while not results.empty():
             kind, r, title, revision = results.get()
             state["busy"] = False
@@ -267,6 +366,11 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
     debug_on = multiprocessing.Event()  # 同上，置位=子进程往队列里送整帧给调试窗
     ov = Overlay(on_fill=fill_reply, on_toggle_capture=on_toggle_capture,
                  on_target_change=on_target_change, on_toggle_debug=set_debug,
+                 on_manual_analyze=manual_analyze,
+                 on_details=lambda: _on_extra("details"),
+                 on_rewrite=lambda: _on_extra("rewrite"),
+                 on_settings_saved=on_settings_saved,
+                 on_explain=lambda index: _on_extra("explain", index),
                  result_of=lambda t: chats.get(t, {}).get("result"))
     child = dbg = None
     try:
@@ -278,7 +382,7 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
         child = spawn_worker()
     if settings.debug_view():  # 上次开着就直接开回来
         set_debug(True)
-    if not settings.has_jev_key():
+    if not settings.has_strategy_key():
         ov.set_status("请先在设置中配置模型", "warning")
         ov.after(0, ov.open_settings)
     if settings.check_update() and update.parse_version(VERSION):  # 开发版没有版本号，不查也不烦源码用户

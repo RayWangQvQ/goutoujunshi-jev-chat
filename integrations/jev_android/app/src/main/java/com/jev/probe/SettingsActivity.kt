@@ -29,6 +29,7 @@ import com.jev.probe.core.kb.KbStore
 import com.jev.probe.jev.JudgeClient
 import com.jev.probe.jev.ReplyClient
 import com.jev.probe.jev.VisionClient
+import com.jev.probe.jev.DeepSeekStrategyClient
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -69,10 +70,50 @@ class SettingsActivity : AppCompatActivity() {
         // =================== 接口 ===================
         root.addView(section("接口"))
 
+        // Mac-aligned strategy choice. DeepSeek is an independent official route;
+        // its key can reuse the reply key only when the reply host is DeepSeek.
+        val strategyCard = card()
+        strategyCard.addView(cardTitle("策略判断"))
+        strategyCard.addView(text("Jev 或 DeepSeek 独立判断；回复模型在下方单独选择。", 12f, sub))
+        var strategyIdx = if (prefs.strategyProvider == "deepseek") 1 else 0
+        strategyCard.addView(pills(listOf("Jev", "DeepSeek 官方"), strategyIdx) {
+            strategyIdx = it
+        })
+        strategyCard.addView(label("DeepSeek 策略模型"))
+        val strategyModelEdit = edit(prefs.strategyModel, "deepseek-flash")
+        strategyCard.addView(strategyModelEdit)
+        strategyCard.addView(label("DeepSeek 策略密钥"))
+        val strategyKeyEdit = edit(prefs.strategyKey, "仅在选择 DeepSeek 时使用", password = true)
+        strategyCard.addView(strategyKeyEdit)
+        strategyCard.addView(text("回复接口也选 DeepSeek 官方时，可复用下方回复密钥。" +
+            "策略 token 权重只在三次标签轮换一致时展示，不能当作回复成功率。", 11f, sub))
+        val strategyResult = resultText()
+        strategyCard.addView(cardBtn("测试 DeepSeek 策略") {
+            val model = strategyModelEdit.text.toString().trim()
+            val key = strategyKeyEdit.text.toString().trim().ifBlank {
+                if (prefs.replyBaseUrl.trimEnd('/') == Prefs.DEEPSEEK_BASE) prefs.replyKey else ""
+            }
+            if (model.isBlank() || key.isBlank()) {
+                strategyResult.text = "请填写 DeepSeek 策略模型和密钥"; return@cardBtn
+            }
+            strategyResult.text = "测试中…"
+            val probe = draftPrefs("strategy_probe") {
+                strategyProvider = "deepseek"; strategyModel = model; strategyKey = key
+            }
+            worker.execute {
+                val demo = ChatSnapshot("连通测试", listOf(Msg("other", "这周有点忙，下周再说吧")))
+                val result = DeepSeekStrategyClient(probe).judge(demo, prefs.relationship)
+                main.post { strategyResult.text = result.error ?: "成功 · ${result.strategy} · " +
+                    (if (result.strategyWeights.isEmpty()) "token 权重暂不可用" else "已取得策略相对权重") }
+            }
+        })
+        strategyCard.addView(strategyResult)
+        root.addView(strategyCard)
+
         // --- 判断接口（Jev） ---
         val judgeCard = card()
         judgeCard.addView(cardTitle("判断接口（Jev）"))
-        judgeCard.addView(text("读对方消息、给意图判断和候选排序。必须配置。", 12f, sub))
+        judgeCard.addView(text("选 Jev 策略时使用；选 DeepSeek 策略时可留空。", 12f, sub))
 
         val judgeBaseEdit = edit(prefs.judgeBaseUrl, Prefs.DEFAULT_JUDGE_BASE_OPENROUTER)
         val judgeModelEdit = edit(prefs.judgeModel, Prefs.DEFAULT_JUDGE_MODEL_OPENROUTER)
@@ -208,20 +249,22 @@ class SettingsActivity : AppCompatActivity() {
         // --- 视觉接口 ---
         val visionCard = card()
         visionCard.addView(cardTitle("视觉接口（OCR 用，可先不填）"))
-        visionCard.addView(text("读不到控件树的 App 走截图识别。B 阶段才用到，现在填不填都不影响。", 12f, sub))
+        visionCard.addView(text("读不到控件树时可选图片识别；截图会发到所选接口，并可能计费。", 12f, sub))
 
         val visionBaseEdit = edit(prefs.visionBaseUrl, Prefs.DEFAULT_VISION_BASE)
         val visionModelEdit = edit(prefs.visionModel, Prefs.DEFAULT_VISION_MODEL)
         val visionIdx = when (prefs.visionBaseUrl.trim().trimEnd('/')) {
             Prefs.DEFAULT_VISION_BASE -> 0
-            Prefs.DASHSCOPE_BASE -> 1
-            else -> 2
+            Prefs.DEEPSEEK_BASE -> 1
+            Prefs.DASHSCOPE_BASE -> 2
+            else -> 3
         }
         visionCard.addView(pills(
-            listOf("OpenRouter", "通义兼容", "自定义"), visionIdx) { idx ->
+            listOf("OpenRouter", "DeepSeek", "通义兼容", "自定义"), visionIdx) { idx ->
             when (idx) {
                 0 -> { visionBaseEdit.setText(Prefs.DEFAULT_VISION_BASE); visionModelEdit.setText(Prefs.DEFAULT_VISION_MODEL) }
-                1 -> { visionBaseEdit.setText(Prefs.DASHSCOPE_BASE); visionModelEdit.setText(Prefs.DASHSCOPE_VISION_MODEL) }
+                1 -> { visionBaseEdit.setText(Prefs.DEEPSEEK_BASE); visionModelEdit.setText("deepseek-flash") }
+                2 -> { visionBaseEdit.setText(Prefs.DASHSCOPE_BASE); visionModelEdit.setText(Prefs.DASHSCOPE_VISION_MODEL) }
             }
         })
         visionCard.addView(label("Base URL"))
@@ -281,6 +324,13 @@ class SettingsActivity : AppCompatActivity() {
         card2.addView(autoRow)
 
         // --- OCR 兜底（B 阶段）---
+        card2.addView(label("截图识图方式"))
+        var ocrEngineIdx = if (prefs.ocrEngine == Prefs.OCR_VISION) 1 else 0
+        card2.addView(pills(listOf("ML Kit 本地", "视觉模型（DeepSeek 等）"), ocrEngineIdx) {
+            ocrEngineIdx = it
+        })
+        card2.addView(text("视觉模型会收到裁剪后的聊天截图并产生接口用量；识别原文和说话人仍需核对。" +
+            "DeepSeek Flash 可用于图片识别。", 11f, sub))
         val ocrFallbackRow = toggleRow("树读不到正文时用 OCR 兜底", prefs.ocrFallback)
         card2.addView(ocrFallbackRow)
         card2.addView(text("可见聊天画面的文字可用本地 OCR 识别；当前 Android 预览版无法截取微信聊天画面，暂不支持微信。", 11f, sub))
@@ -361,6 +411,9 @@ class SettingsActivity : AppCompatActivity() {
 
         // =================== 保存 ===================
         root.addView(primaryBtn("保存全部设置") {
+            prefs.strategyProvider = if (strategyIdx == 1) "deepseek" else "jev"
+            prefs.strategyModel = strategyModelEdit.text.toString().trim().ifBlank { "deepseek-flash" }
+            prefs.strategyKey = strategyKeyEdit.text.toString().trim()
             // Address wins over the pill: a preset HOST in the box means that
             // preset's provider (and so its path), whatever the pill last said.
             val judgeBaseTyped = judgeBaseEdit.text.toString().trim()
@@ -395,6 +448,7 @@ class SettingsActivity : AppCompatActivity() {
                 .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: false
             prefs.ocrFallback = (ocrFallbackRow.tag as? Boolean) ?: true
+            prefs.ocrEngine = if (ocrEngineIdx == 1) Prefs.OCR_VISION else Prefs.OCR_MLKIT
             prefs.ocrAutoAnalyze = (ocrAutoRow.tag as? Boolean) ?: false
             prefs.contextEnabled = (ctxRow.tag as? Boolean) ?: false
             prefs.contextHistoryCount =
@@ -608,9 +662,8 @@ class SettingsActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "JEVASSIST"
 
-        /** DeepSeek's official API has no vision model; say so instead of a 400. */
         private const val GUARD_NO_VISION =
-            "该接口不支持视觉（DeepSeek 官方没有 image_url），请换 OpenRouter 或通义兼容"
+            "请填写图片识别接口地址"
 
         /** One scratch prefs file per test button; never the real config. */
         private const val SCRATCH_JUDGE = "jev_probe_scratch_judge"

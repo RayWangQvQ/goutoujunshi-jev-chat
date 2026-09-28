@@ -18,17 +18,17 @@ Download the file for your platform from [GitHub Releases](https://github.com/sh
 | Windows | [`goutoujunshi-jev-chat-windows-preview.zip`](https://github.com/shengjidaguai-china/goutoujunshi-jev-chat/releases/latest/download/goutoujunshi-jev-chat-windows-preview.zip) | Executable-directory ZIP. Automated build passes; Windows device validation is pending. |
 | Android | [`goutoujunshi-jev-chat-android-debug.apk`](https://github.com/shengjidaguai-china/goutoujunshi-jev-chat/releases/latest/download/goutoujunshi-jev-chat-android-debug.apk) | Android 11+ debug preview. **It currently cannot capture WeChat chat screenshots, so WeChat is unsupported.** Other chat-app paths still need device validation. |
 
-The screenshots and full transcript review, relationship profiles, and candlestick view below are from the Mac version. Windows includes chat capture, Jev judgment, and reply drafting; Android provides an overlay, judgment, and draft replies in a debug preview. Those full Mac screens have not been ported. See the [Windows guide](integrations/jev_windows/README.md) and [Android guide](integrations/jev_android/README.md).
+All three builds now include transcript review, Jev or DeepSeek strategy judgment, ranked drafts, detailed analysis, style rewrites, relationship stage and goal, and example/CSV candlestick charts. The screenshots below show the Mac interface; layouts and capture capabilities differ by platform. Android still cannot capture WeChat. See the [Windows guide](integrations/jev_windows/README.md) and [Android guide](integrations/jev_android/README.md).
 
 ### Android: install the debug APK
 
-On Android 11 or later, download the APK and allow installation from that source when prompted. Configure the judgment and reply endpoints in the app, then grant Accessibility and overlay permissions as guided. The assistant and automatic analysis start disabled and must be enabled by you. **This Android preview cannot currently capture WeChat chat screenshots, so it does not support WeChat.** The Mac screenshots beside WeChat do not show Android behavior. QQ, X, and Feishu paths still require validation on actual devices. The app drafts replies; you decide whether to send them.
+On Android 11 or later, download the APK and allow installation from that source when prompted. Select Jev or DeepSeek for strategy judgment, configure a reply model, and choose local ML Kit or an image model (DeepSeek Flash, OpenRouter, or another compatible endpoint) for screenshot recognition. Grant Accessibility and overlay permissions as guided. The assistant and automatic analysis start disabled. Check recognized text and speakers before confirming analysis. **This Android preview cannot currently capture WeChat chat screenshots, so it does not support WeChat.** QQ, X, and Feishu paths still require validation on actual devices. The app drafts replies; you decide whether to send them.
 
 ### Windows: extract the ZIP
 
 Requires Windows 10 version 1903 or later, or Windows 11, with WeChat for Windows 4.x. Download the preview ZIP, **extract the entire archive**, open the `goutoujunshi-jev-chat-windows` folder, and run `goutoujunshi-jev-chat-windows.exe`. The packaged build does not require a separate Python installation.
 
-In Settings, configure the **Jev judgment** and **reply generation** endpoints separately. Open the intended WeChat conversation and keep the window visible, then use the overlay to capture and analyze it. You can copy a candidate or fill a draft. Filling depends on window coordinates; verify the conversation, recipient, and draft before sending it yourself. This build still needs Windows device validation. See the [Windows guide](integrations/jev_windows/README.md) for running from source.
+In Settings, select **Jev or DeepSeek strategy judgment** and configure a reply provider. OCR can run locally with RapidOCR or send a cropped chat image to DeepSeek/OpenRouter. Open the intended WeChat conversation and keep the window visible. After capture, click “Review transcript and analyze” to correct text and speakers. The result also offers detailed analysis, a style rewrite, per-chat stage and goal settings, and a CSV chart window. You can copy a candidate or fill a draft. Filling depends on window coordinates; verify the conversation, recipient, and draft before sending it yourself. This build still needs Windows device validation. See the [Windows guide](integrations/jev_windows/README.md) for running from source.
 
 ### macOS: run the source preview
 
@@ -104,7 +104,7 @@ For models, OCR choices, Keychain and environment configuration, CSV format, and
 
 ## Verification and status
 
-On September 28, 2026, 102 Python tests and a Mac provider-window construction check passed after the DeepSeek strategy judgment and weight-validation change. The Mac and Windows automated builds and Mac ZIP extraction and demo checks previously passed on September 24. To repeat the local checks:
+On September 28, 2026, Python tests and the Android debug APK build/unit tests passed after the cross-platform strategy and transcript-review updates. Windows device validation remains pending. To repeat the local checks:
 
 ```bash
 python3 -B scripts/validate_skill.py

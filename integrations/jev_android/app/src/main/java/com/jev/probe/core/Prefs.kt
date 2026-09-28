@@ -60,6 +60,23 @@ class Prefs(context: Context, prefsName: String = PREFS_MAIN) {
         get() = sp.getString(K_JUDGE_MODEL, DEFAULT_JUDGE_MODEL_OPENROUTER) ?: DEFAULT_JUDGE_MODEL_OPENROUTER
         set(v) = sp.edit().putString(K_JUDGE_MODEL, v.trim()).apply()
 
+    /** Jev or independent DeepSeek strategy judgment. */
+    var strategyProvider: String
+        get() = sp.getString(K_STRATEGY_PROVIDER, "jev") ?: "jev"
+        set(v) = sp.edit().putString(K_STRATEGY_PROVIDER, if (v == "deepseek") v else "jev").apply()
+
+    var strategyModel: String
+        get() = sp.getString(K_STRATEGY_MODEL, "deepseek-flash") ?: "deepseek-flash"
+        set(v) = sp.edit().putString(K_STRATEGY_MODEL, v.trim()).apply()
+
+    var strategyKey: String
+        get() = sp.getString(K_STRATEGY_KEY, "") ?: ""
+        set(v) = sp.edit().putString(K_STRATEGY_KEY, v.trim()).apply()
+
+    fun effectiveStrategyKey(): String = strategyKey.ifBlank {
+        if (replyBaseUrl.trim().trimEnd('/') == DEEPSEEK_BASE && replyKey.isNotBlank()) replyKey else ""
+    }
+
     /** Back-compat alias so older call sites keep compiling. */
     var openRouterKey: String
         get() = judgeKey
@@ -192,7 +209,9 @@ class Prefs(context: Context, prefsName: String = PREFS_MAIN) {
 
     /** Never send a reply or judge key to a different vision host. */
     fun effectiveVisionKey(): String = RouteKeys.vision(visionKey, replyKey, judgeKey,
-        visionEndpoint(), replyEndpoint(), judgeEndpoint())
+        visionEndpoint(), replyEndpoint(), judgeEndpoint()).ifBlank {
+        if (visionBaseUrl.trim().trimEnd('/') == DEEPSEEK_BASE) strategyKey else ""
+    }
 
     /** Full POST URL for the Jev decisions call, per provider. */
     fun judgeEndpoint(): String {
@@ -221,7 +240,8 @@ class Prefs(context: Context, prefsName: String = PREFS_MAIN) {
     }
 
     /** Readiness gate: the judge route is the one that must be configured. */
-    fun hasKey(): Boolean = judgeKey.isNotBlank()
+    fun hasKey(): Boolean = if (strategyProvider == "deepseek") effectiveStrategyKey().isNotBlank()
+                            else judgeKey.isNotBlank()
 
     companion object {
         private const val TAG = "JEVASSIST"
@@ -235,6 +255,9 @@ class Prefs(context: Context, prefsName: String = PREFS_MAIN) {
         private const val K_JUDGE_BASE = "judge_base_url"
         private const val K_JUDGE_KEY = "judge_key"
         private const val K_JUDGE_MODEL = "judge_model"
+        private const val K_STRATEGY_PROVIDER = "strategy_provider"
+        private const val K_STRATEGY_MODEL = "strategy_model"
+        private const val K_STRATEGY_KEY = "strategy_key"
         private const val K_REPLY_BASE = "reply_base_url"
         private const val K_REPLY_KEY = "reply_key"
         private const val K_REPLY_MODEL = "reply_model"
@@ -273,7 +296,7 @@ class Prefs(context: Context, prefsName: String = PREFS_MAIN) {
         const val DEFAULT_REPLY_BASE = "https://openrouter.ai/api/v1"
         const val DEFAULT_REPLY_MODEL = "deepseek/deepseek-chat-v3.1"
         const val DEEPSEEK_BASE = "https://api.deepseek.com/v1"
-        const val DEEPSEEK_MODEL = "deepseek-chat"
+        const val DEEPSEEK_MODEL = "deepseek-flash"
         const val DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         const val DASHSCOPE_MODEL = "qwen-plus"
 

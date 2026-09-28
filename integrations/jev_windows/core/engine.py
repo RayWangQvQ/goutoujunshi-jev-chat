@@ -10,11 +10,13 @@ try:
     from .jev_client import JevError, ask
     from .goutou import brief, explicit_boundary
     from .questions import JUDGE_QUESTIONS, build_rank_question, build_state, guidance_text
+    from .deepseek_strategy import decide as deepseek_decide, rank as deepseek_rank
 except ImportError:
     from draft import draft_candidates
     from jev_client import JevError, ask
     from goutou import brief, explicit_boundary
     from questions import JUDGE_QUESTIONS, build_rank_question, build_state, guidance_text
+    from deepseek_strategy import decide as deepseek_decide, rank as deepseek_rank
 
 _REPLY_IDX = {"reply_a": 0, "reply_b": 1, "reply_c": 2}
 
@@ -29,7 +31,8 @@ def analyze(messages: list, relationship: str, model: str | None = None,
             timeout: float = 30, context: int = 10, provider: str = "deepseek",
             base_url: str | None = None, reply_to: str | None = None, style: str = "",
             thinking: bool = False, jev_provider: str = "openrouter",
-            jev_model: str | None = None) -> dict:
+            jev_model: str | None = None, strategy_provider: str = "jev",
+            strategy_model: str = "deepseek-flash", strategy_key: str = "") -> dict:
     """messages: [(from, text)] from ∈ {her, me}，最新一条在最后；
     群聊里可以带第三项 name（说这句话的人），单聊不带。
     context: 起草和判断各看最近多少条消息（用户设置里的「参考上下文」）。
@@ -53,6 +56,33 @@ def analyze(messages: list, relationship: str, model: str | None = None,
         return {"candidates": [], "best_index": None, "best_reply": None,
                 "scores": [], "answers": {}, "usage": {}, "reply_to": reply_to,
                 "goutou": reading}
+    if strategy_provider == "deepseek":
+        decision = deepseek_decide(messages[-context:], relationship, strategy_model,
+                                   strategy_key, timeout=timeout)
+        guidance = (f"独立策略判断：{decision['strategy']}。可能的意图：{decision['intent']}。"
+                    "已知事实：" + "；".join(decision["facts"]) + "。关键未知：" +
+                    "；".join(decision["unknowns"]))
+        candidates = draft_candidates(messages, relationship, provider=provider, model=model,
+                                      base_url=base_url, timeout=timeout, keep=context,
+                                      reply_to=reply_to, style=style, thinking=thinking,
+                                      guidance=guidance)
+        scores = deepseek_rank(messages[-context:], relationship, decision["strategy"],
+                               candidates, strategy_model, strategy_key, timeout=timeout)
+        best_index = max(range(len(scores)), key=lambda i: scores[i]) if scores else (
+            0 if candidates else None)
+        reading = {
+            "facts": decision["facts"], "intent": decision["intent"],
+            "intent_confidence": decision["confidence"] if decision["facts"] else None,
+            "action": f"本轮主策略：{decision['strategy']}",
+            "unknown": "；".join(decision["unknowns"]) or "完整上下文和对方内心仍未知",
+            "next_step": "先核对原文，再按主策略选择候选；必要时先不回复。",
+            "stop_condition": "对方明确拒绝或要求停止联系时停止推进。",
+            "evidence_note": ("DeepSeek 三次标签轮换的首 token 权重只用于策略相对选择；"
+                              "判断把握不是对方真实意图概率，候选权重不是回复成功率。")}
+        return {"candidates": candidates, "best_index": best_index,
+                "best_reply": candidates[best_index] if best_index is not None else None,
+                "scores": scores, "answers": {}, "usage": {}, "reply_to": reply_to,
+                "goutou": reading, "strategy_decision": decision}
     usage: dict = {}
     answers: dict = {}
     judged = False

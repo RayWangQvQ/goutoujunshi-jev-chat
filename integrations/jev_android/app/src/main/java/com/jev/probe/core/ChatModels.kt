@@ -48,7 +48,12 @@ data class Analysis(
     val literalQuestion: Double?,
     val rankedReplies: List<RankedReply>,
     val latencyMs: Long,
-    val error: String? = null
+    val error: String? = null,
+    val strategy: String? = null,
+    val strategyWeights: Map<String, Double> = emptyMap(),
+    val strategyMethod: String? = null,
+    val facts: List<String> = emptyList(),
+    val unknowns: List<String> = emptyList()
 )
 
 data class Choice(val choice: String, val confidence: Double, val probabilities: Map<String, Double>)

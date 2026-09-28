@@ -62,6 +62,7 @@ jobs:
       - run: python -m pip install -r requirements.txt pyinstaller
       - run: python -m compileall -q app core main.py
       - run: python -m core.draft
+      - run: python -c "import app.overlay, app.review, app.trend_ui, app.cloud_ocr, core.experience"
       - run: pyinstaller --noconfirm --clean jev.spec
       - name: Create Windows ZIP
         shell: pwsh
@@ -126,7 +127,7 @@ jobs:
           - **Windows:** `goutoujunshi-jev-chat-windows-preview.zip` — extract the complete directory before launching the executable. Automated build passes; physical-device validation is pending.
           - **Android:** `goutoujunshi-jev-chat-android-debug.apk` — Android 11+ debug preview. **WeChat is currently unsupported because this Android build cannot capture WeChat chat screenshots.** Other chat-app paths still need device-level validation.
 
-          The Mac screenshots and full relationship features in the README do not yet apply to Windows or Android. Check `SHA256SUMS.txt` after downloading. See the README and PRIVACY.md for setup, feature scope, and data use.
+          Transcript review, Jev/DeepSeek strategy selection, ranked drafts, detailed analysis, style rewrite, relationship stage/goal, and example/CSV K-line views are included across the three platforms. UI layouts and capture support differ; the screenshots in the README show Mac. Check `SHA256SUMS.txt` after downloading. See the README and PRIVACY.md for setup, feature scope, and data use.
 
           Windows packages include PySide6-Fluent-Widgets; see `integrations/jev_windows/NOTICE` for redistribution terms.
           EOF

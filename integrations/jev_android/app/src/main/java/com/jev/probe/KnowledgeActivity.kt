@@ -278,6 +278,8 @@ class KnowledgeActivity : AppCompatActivity() {
             minLines = 3; gravity = Gravity.TOP
         }
         val relEdit = edit(existing?.relationship ?: "", "例如：同事，带我做项目的组长")
+        val stageEdit = edit(existing?.stage ?: "未填写", "初识／了解中／暧昧／约会中／伴侣／关系结束")
+        val goalEdit = edit(existing?.goal ?: "自然接话", "自然接话／主动邀约／澄清关系／修复冲突／减少投入／结束联系")
         val notesEdit = edit(existing?.notes ?: "", "关于这个人要记住的事").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 3; gravity = Gravity.TOP
@@ -285,6 +287,8 @@ class KnowledgeActivity : AppCompatActivity() {
         box.addView(label("名字")); box.addView(nameEdit)
         box.addView(label("别名（每行一个）")); box.addView(aliasEdit)
         box.addView(label("关系")); box.addView(relEdit)
+        box.addView(label("关系阶段")); box.addView(stageEdit)
+        box.addView(label("本轮目标")); box.addView(goalEdit)
         box.addView(label("备注")); box.addView(notesEdit)
 
         AlertDialog.Builder(this)
@@ -300,6 +304,8 @@ class KnowledgeActivity : AppCompatActivity() {
                         .map { it.trim() }.filter { it.isNotEmpty() },
                     apps = existing?.apps ?: emptyList(),
                     relationship = relEdit.text.toString().trim(),
+                    stage = stageEdit.text.toString().trim().take(40).ifBlank { "未填写" },
+                    goal = goalEdit.text.toString().trim().take(40).ifBlank { "自然接话" },
                     notes = notesEdit.text.toString().trim(),
                     autoSummary = existing?.autoSummary ?: ""
                 ))

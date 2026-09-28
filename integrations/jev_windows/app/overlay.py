@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QSizeGrip, QSizePolicy, QStackedWidget,
+    QApplication, QDialog, QFrame, QHBoxLayout, QPlainTextEdit, QSizeGrip, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 from qfluentwidgets import (
@@ -122,7 +122,7 @@ class _ReplyCard(_Surface):
         top = QHBoxLayout()
         label = "推荐回复" if recommended else f"备选 {number}"
         if score is not None:
-            label += f" · {round(score * 100)}%"
+            label += f" · 相对权重 {round(score * 100)}%"
         top.addWidget(_label(label, 12, _GREEN if recommended else _MUTED, True))
         self.copyButton = _tool(FIF.COPY, "复制这条回复", lambda: owner._copy(index), self)
         self.copyButton.setFixedSize(24, 24)
@@ -132,6 +132,9 @@ class _ReplyCard(_Surface):
         self.text.setTextInteractionFlags(Qt.TextSelectableByMouse)
         box.addWidget(self.text)
         bottom = QHBoxLayout()
+        self.reasonButton = PushButton("为什么这样回", self)
+        self.reasonButton.clicked.connect(lambda: owner._explain(index))
+        bottom.addWidget(self.reasonButton)
         bottom.addStretch(1)
         self.fillButton = (PrimaryPushButton if recommended else PushButton)("填入微信", self)
         self.fillButton.setAccessibleName(f"填入{'推荐回复' if recommended else f'备选 {number}'}到微信")
@@ -143,6 +146,7 @@ class _ReplyCard(_Surface):
     def set_available(self, enabled):
         self.fillButton.setEnabled(enabled)
         self.copyButton.setEnabled(enabled)
+        self.reasonButton.setEnabled(enabled)
 
     def set_compact(self, compact):
         self.box.setContentsMargins(12, 8, 12, 8) if compact else self.box.setContentsMargins(16, 12, 16, 12)
@@ -151,7 +155,8 @@ class _ReplyCard(_Surface):
 
 class Overlay:
     def __init__(self, on_fill, on_toggle_capture=None, on_target_change=None, result_of=None,
-                 on_toggle_debug=None):
+                 on_toggle_debug=None, on_manual_analyze=None, on_details=None, on_rewrite=None,
+                 on_settings_saved=None, on_explain=None):
         """result_of(会话名) → 那个会话上次的结果或 None；切着看别的会话时用它把旧结果放回来。
         on_target_change(会话名, 人名) → 用户在群里挑了回复对象。
         on_toggle_debug(开不开) → 开关调试视图那个独立窗口。"""
@@ -162,8 +167,14 @@ class Overlay:
         self.on_toggle_capture = on_toggle_capture
         self.on_target_change = on_target_change
         self.on_toggle_debug = on_toggle_debug
+        self.on_manual_analyze = on_manual_analyze
+        self.on_details = on_details
+        self.on_rewrite = on_rewrite
+        self.on_settings_saved = on_settings_saved
+        self.on_explain = on_explain
         self.result_of = result_of
         self.cands = []
+        self._trend_window = None
         self.cards = []
         self._busy = False
         self._current = False
@@ -208,6 +219,10 @@ class Overlay:
         self.captureSwitch.checkedChanged.connect(self._capture_toggled)
         title.addWidget(self.captureSwitch)
         self.settingsButton = _tool(FIF.SETTING, "设置", self.open_settings, header)
+        trend_button = PushButton("K 线", header)
+        trend_button.setToolTip("查看示例走势或导入聊天 CSV")
+        trend_button.clicked.connect(self.open_trend)
+        title.addWidget(trend_button)
         title.addWidget(self.settingsButton)
         title.addWidget(_tool(FIF.REMOVE, "最小化", self.win.showMinimized, header))
         title.addWidget(_tool(FIF.CLOSE, "关闭助手", self.win.close, header))
@@ -337,6 +352,9 @@ class Overlay:
         body.addWidget(self.targetRow)
         self.status = _label("", 12, _MUTED)
         body.addWidget(self.status)
+        self.analyzeButton = PrimaryPushButton("核对原文并分析")
+        self.analyzeButton.clicked.connect(lambda: self.on_manual_analyze and self.on_manual_analyze())
+        body.addWidget(self.analyzeButton)
         self.progress = IndeterminateProgressBar()
         self.progress.setFixedHeight(3)
         self.progress.hide()
@@ -365,6 +383,8 @@ class Overlay:
         insight_box.addLayout(row)
         self.summary = _label("", 14, "#304c3c", True)
         insight_box.addWidget(self.summary)
+        self.strategyInfo = _label("", 12, _MUTED)
+        insight_box.addWidget(self.strategyInfo)
         self.intent = _label("", 12, _MUTED)
         insight_box.addWidget(self.intent)
         self.evidence = _label("", 12, _MUTED)
@@ -403,6 +423,14 @@ class Overlay:
         self.referenceNote = _label("AI 建议仅供参考，按你的语气调整后再发送。", 11, _MUTED)
         self.referenceNote.hide()
         body.addWidget(self.referenceNote)
+        actions = QHBoxLayout()
+        self.detailsButton = PushButton("详细分析")
+        self.detailsButton.clicked.connect(lambda: self.on_details and self.on_details())
+        actions.addWidget(self.detailsButton)
+        self.rewriteButton = PushButton("更像我一点")
+        self.rewriteButton.clicked.connect(lambda: self.on_rewrite and self.on_rewrite())
+        actions.addWidget(self.rewriteButton)
+        body.addLayout(actions)
 
         self.historyButton = PushButton(FIF.HISTORY, "聊天记录")
         self.historyButton.clicked.connect(self._toggle_history)
@@ -475,6 +503,14 @@ class Overlay:
         box.addWidget(self._hint(
             "开了以后群聊里可以选回复给谁，候选会针对 TA 写，填入时可带 @。关了就正常回复。"
         ))
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(_label("新消息到来时提示核对并分析", 13), 1)
+        self.autoSwitch = SwitchButton()
+        self.autoSwitch.setOnText("开")
+        self.autoSwitch.setOffText("关")
+        auto_row.addWidget(self.autoSwitch)
+        box.addLayout(auto_row)
+        box.addWidget(self._hint("默认关闭；打开后仍需人工核对 OCR 原文和说话人。"))
         update_row = QHBoxLayout()
         update_row.addWidget(_label("启动时检查更新", 13), 1)
         self.updateSwitch = SwitchButton()
@@ -501,16 +537,54 @@ class Overlay:
         ))
         body.addWidget(preference)
 
+        profile = _Surface()
+        profile_box = QVBoxLayout(profile)
+        profile_box.setContentsMargins(16, 16, 16, 18)
+        profile_box.addWidget(_label("当前会话 · 关系档案（可选）", 16, "#304c3c", True))
+        self.profileTitle = _label("请先识别会话", 12, _MUTED)
+        profile_box.addWidget(self.profileTitle)
+        profile_box.addWidget(_label("关系阶段", 13))
+        self.profileStage = ComboBox()
+        self.profileStage.addItems(list(settings.STAGES))
+        profile_box.addWidget(self.profileStage)
+        profile_box.addWidget(_label("本轮目标", 13))
+        self.profileGoal = ComboBox()
+        self.profileGoal.addItems(list(settings.GOALS))
+        profile_box.addWidget(self.profileGoal)
+        self.profileBackground = PlainTextEdit()
+        self.profileBackground.setPlaceholderText("补充已知背景，最多 200 字；不确定可以留空")
+        self.profileBackground.setFixedHeight(80)
+        profile_box.addWidget(self.profileBackground)
+        save_profile = PushButton("保存当前会话档案")
+        save_profile.clicked.connect(self._save_profile)
+        profile_box.addWidget(save_profile)
+        profile_box.addWidget(_label("只在主动保存后记录对象称呼、阶段、目标和补充背景；不保存完整聊天。", 11, _MUTED))
+        body.addWidget(profile)
+
         models = _Surface()
         box = QVBoxLayout(models)
         box.setContentsMargins(16, 16, 16, 18)
         box.setSpacing(12)
         box.addWidget(_label("模型", 16, "#304c3c", True))
+        box.addWidget(_label("策略判断来源", 13))
+        self.strategyProviderBox = ComboBox()
+        self.strategyProviderBox.addItems(["Jev", "DeepSeek 官方"])
+        self.strategyProviderBox.setAccessibleName("策略判断来源")
+        box.addWidget(self.strategyProviderBox)
+        box.addWidget(self._hint("选 DeepSeek 时会独立整理证据，并尝试用三次标签轮换的首 token 概率核对七种策略。"))
+        self.strategyModelEdit = LineEdit()
+        self.strategyModelEdit.setPlaceholderText("DeepSeek 策略模型，例如 deepseek-flash")
+        self.strategyModelEdit.setAccessibleName("DeepSeek 策略模型")
+        box.addWidget(self.strategyModelEdit)
+        self.strategyKeyEdit = PasswordLineEdit()
+        self.strategyKeyEdit.setPlaceholderText("DeepSeek 策略密钥；若回复也用 DeepSeek，可复用回复密钥")
+        self.strategyKeyEdit.setAccessibleName("DeepSeek 策略密钥")
+        box.addWidget(self.strategyKeyEdit)
         self._fetched = _Fetched()
         self._fetched.done.connect(self._models_fetched)
-        self.jev = self._model_group(box, "判断 · Jev", "jev", providers.JEV_PROVIDERS)
+        self.jev = self._model_group(box, "Jev 判断（选 Jev 时使用）", "jev", providers.JEV_PROVIDERS)
         box.addWidget(self._hint(
-            "判断意图、紧张度，并给三条候选排序。两家给的是同一个 Jev，必填。"
+            "Jev 来源可选 OpenRouter 或 TypeSafe；选择 DeepSeek 策略时此项不参与分析。"
         ))
         self.draft = self._model_group(box, "起草 · 语言模型", "draft", providers.DRAFT_PROVIDERS)
         box.addWidget(self._hint(
@@ -530,6 +604,25 @@ class Overlay:
             "只有 " + " / ".join(providers.THINKING) + " 认这个开关。"
         ))
         body.addWidget(models)
+        ocr = _Surface()
+        ocr_box = QVBoxLayout(ocr)
+        ocr_box.setContentsMargins(16, 16, 16, 18)
+        ocr_box.setSpacing(10)
+        ocr_box.addWidget(_label("识图方式", 16, "#304c3c", True))
+        self.ocrProviderBox = ComboBox()
+        self.ocrProviderBox.addItems(["RapidOCR · 本地", "DeepSeek · 图片识别", "OpenRouter · 图片识别"])
+        self.ocrProviderBox.currentIndexChanged.connect(self._ocr_changed)
+        ocr_box.addWidget(self.ocrProviderBox)
+        self.ocrModelEdit = LineEdit()
+        self.ocrModelEdit.setAccessibleName("图片识别模型")
+        self.ocrModelEdit.setPlaceholderText("支持图片输入的模型 ID")
+        ocr_box.addWidget(self.ocrModelEdit)
+        self.ocrKeyEdit = PasswordLineEdit()
+        self.ocrKeyEdit.setAccessibleName("图片识别密钥")
+        self.ocrKeyEdit.setPlaceholderText("可单独填写；与回复来源相同时可复用回复密钥")
+        ocr_box.addWidget(self.ocrKeyEdit)
+        ocr_box.addWidget(self._hint("选择云端识图后，聊天区截图会发送到所选服务并可能计费；识别后仍需核对原文。"))
+        body.addWidget(ocr)
         self.settingsFeedback = _label("", 13, _GREEN)
         self.settingsFeedback.hide()
         body.addWidget(self.settingsFeedback)
@@ -706,14 +799,45 @@ class Overlay:
         self.styleEdit.setText(settings.style())
         self.contextBox.setValue(settings.context())
         self.targetSwitch.setChecked(settings.reply_target())
+        self.autoSwitch.setChecked(settings.auto_analyze())
         self._set_group(self.jev, settings.jev_provider(), settings.jev_model())
+        self.strategyProviderBox.setCurrentIndex(1 if settings.strategy_provider() == "deepseek" else 0)
+        self.strategyModelEdit.setText(settings.strategy_model())
+        self.strategyKeyEdit.clear()
+        self.strategyKeyEdit.setPlaceholderText("已配置，留空保留" if settings.strategy_key() else
+                                                "DeepSeek 策略密钥；DeepSeek 回复可复用回复密钥")
+        self.ocrProviderBox.setCurrentIndex(("local", "deepseek", "openrouter").index(settings.ocr_provider()))
+        self.ocrModelEdit.setText(settings.ocr_model())
+        self.ocrKeyEdit.clear()
+        self.ocrKeyEdit.setPlaceholderText("已配置，留空保留" if settings.ocr_key() else
+                                            "图片识别密钥；同来源的回复密钥可复用")
+        self._ocr_changed()
         self._set_group(self.draft, settings.draft_provider(), settings.draft_model())
         self.baseEdit.setText(settings.draft_base_url())
         self.thinkingSwitch.setChecked(settings.thinking())
         self.updateSwitch.setChecked(settings.check_update())
         self.set_debug_switch(settings.debug_view())  # 屏蔽信号地拨，别在加载时开关一遍窗口
         self._sync_model_fields()  # 上面屏蔽了信号，这里补一次
+        title = self._shown or self._chat
+        self.profileTitle.setText(f"当前会话：{title}" if title else "请先识别并选择会话")
+        current = settings.profile_of(title)
+        self.profileStage.setCurrentIndex(settings.STAGES.index(current["stage"])
+                                          if current["stage"] in settings.STAGES else 0)
+        self.profileGoal.setCurrentIndex(settings.GOALS.index(current["goal"])
+                                         if current["goal"] in settings.GOALS else 0)
+        self.profileBackground.setPlainText(str(current["background"]))
         self.settingsFeedback.hide()
+
+    def _save_profile(self):
+        title = self._shown or self._chat
+        try:
+            settings.save_profile(title, settings.STAGES[self.profileStage.currentIndex()],
+                                  settings.GOALS[self.profileGoal.currentIndex()],
+                                  self.profileBackground.toPlainText().strip())
+        except ValueError as exc:
+            self._settings_feedback(str(exc), error=True)
+            return
+        self._settings_feedback("当前会话档案已保存；下轮分析生效。")
 
     def _save(self):
         relationship = _RELATIONSHIPS[self.relationshipBox.currentIndex()][1]
@@ -729,7 +853,27 @@ class Overlay:
             self._settings_feedback("自定义来源要填 Base URL。", error=True)
             self.baseEdit.setFocus()
             return
+        strategy_provider = "deepseek" if self.strategyProviderBox.currentIndex() == 1 else "jev"
+        ocr_provider = ("local", "deepseek", "openrouter")[self.ocrProviderBox.currentIndex()]
+        if ocr_provider != "local" and not self.ocrModelEdit.text().strip():
+            self._settings_feedback("请填写支持图片输入的识图模型。", error=True)
+            return
+        if (ocr_provider != "local" and not self.ocrKeyEdit.text().strip()
+                and not settings.ocr_key() and not (ocr_provider == draft_provider and
+                (self.draft.keyEdit.text().strip() or settings.llm_key()))):
+            self._settings_feedback("请填写图片识别密钥，或让识图与回复使用同一来源。", error=True)
+            return
+        if strategy_provider == "deepseek" and not self.strategyModelEdit.text().strip():
+            self._settings_feedback("请填写 DeepSeek 策略模型。", error=True)
+            return
+        if (strategy_provider == "deepseek" and not self.strategyKeyEdit.text().strip()
+                and not settings.strategy_key() and not (
+                    draft_provider == "deepseek" and (self.draft.keyEdit.text().strip() or settings.llm_key()))):
+            self._settings_feedback("请填写 DeepSeek 策略密钥。", error=True)
+            return
         for group, provider in ((self.jev, jev_provider), (self.draft, draft_provider)):
+            if group is self.jev and strategy_provider == "deepseek":
+                continue
             name = group.table[provider].name
             if not group.keyEdit.text().strip() and not group.stored_key():
                 self._settings_feedback(f"请先填写 {group.keyTitle} 的 API 密钥。", error=True)
@@ -749,19 +893,36 @@ class Overlay:
                           draft_model_text=self.draft.modelBox.text().strip(),
                           draft_base_url_text=base,
                           reply_target_on=self.targetSwitch.isChecked(),
+                          auto_analyze_on=self.autoSwitch.isChecked(),
                           style_text=self.styleEdit.text().strip(),
                           thinking_on=self.thinkingSwitch.isChecked(),
+                          strategy_provider_text=strategy_provider,
+                          strategy_model_text=self.strategyModelEdit.text().strip(),
+                          strategy_key_text=self.strategyKeyEdit.text().strip() or None,
+                          ocr_provider_text=ocr_provider,
+                          ocr_model_text=self.ocrModelEdit.text().strip(),
+                          ocr_key_text=self.ocrKeyEdit.text().strip() or None,
                           check_update_on=self.updateSwitch.isChecked())
         except Exception:
             self._settings_feedback("保存失败，请检查配置文件是否可写后重试。", error=True)
             return
         self._load_settings()
+        if self.on_settings_saved:
+            self.on_settings_saved()
         self._render_targets()  # 开关刚改过，回到首页时这一行该显该藏得重算一次
         self._settings_feedback("设置已保存，将用于下一次回复。")
         self.setupButton.hide()
         if not self.cands and not self._busy:
             self._empty_text()
             self.set_status("设置已就绪，等待新消息", "idle")
+
+    def _ocr_changed(self, *_):
+        provider = ("local", "deepseek", "openrouter")[max(0, self.ocrProviderBox.currentIndex())]
+        enabled = provider != "local"
+        self.ocrModelEdit.setEnabled(enabled)
+        self.ocrKeyEdit.setEnabled(enabled)
+        if enabled and self.ocrModelEdit.text().strip() in ("", "deepseek-flash", "openrouter/free"):
+            self.ocrModelEdit.setText("deepseek-flash" if provider == "deepseek" else "openrouter/free")
 
     def _debug_toggled(self, on):
         """调试视图独立于「保存设置」：拨一下就开窗/收窗，顺手落盘，重启还在。"""
@@ -787,7 +948,16 @@ class Overlay:
             self._load_settings()
         self.pages.setCurrentWidget(self.settingsPage)
         self.settingsButton.setEnabled(False)
-        (self.relationshipBox if settings.has_key() else self.jev.keyEdit).setFocus()
+        (self.relationshipBox if settings.has_key() else
+         self.strategyKeyEdit if settings.strategy_provider() == "deepseek" else self.jev.keyEdit).setFocus()
+
+    def open_trend(self):
+        if self._trend_window is None:
+            from app.trend_ui import TrendWindow
+            self._trend_window = TrendWindow()
+        self._trend_window.show()
+        self._trend_window.raise_()
+        self._trend_window.activateWindow()
 
     def _back_home(self):
         self.jev.keyEdit.clear()
@@ -814,6 +984,10 @@ class Overlay:
             return
         self.app.clipboard().setText(self.cands[index])
         self.set_status("回复已复制，可在微信中粘贴并修改。", "success")
+
+    def _explain(self, index):
+        if self._current and not self._busy and self.on_explain:
+            self.on_explain(index)
 
     def _capture_toggled(self, on):
         """用户自己拨的开关：界面先改，再通知父进程去开/停采集。"""
@@ -1067,12 +1241,20 @@ class Overlay:
         answers = result.get("answers") or {}
         reading = result.get("goutou") or {}
         self.summary.setText("军师建议 · " + reading.get("action", _choice(answers, "best_action")))
+        decision = result.get("strategy_decision") or {}
+        if decision:
+            weight = decision.get("confidence")
+            kind = (f"策略选择权重 {weight:.1%}" if decision.get("method") == "deepseek_logprobs"
+                    else "策略 token 权重暂不可用")
+            self.strategyInfo.setText(f"DeepSeek 主策略 · {decision['strategy']} · {kind}；不是回复成功率")
+        else:
+            self.strategyInfo.setText("Jev 策略判断")
         confidence = reading.get("intent_confidence")
         confidence_text = f" · 判断把握 {confidence:.0%}（模型估计）" if confidence is not None else ""
         self.intent.setText("对方可能的意图 · " + reading.get("intent", _choice(answers, "true_intent")) + confidence_text +
                             "\n可能需要 · " + _choice(answers, "she_needs"))
         facts = reading.get("facts") or []
-        self.evidence.setText("已见原文（待核对）\n" + "\n".join(facts) +
+        self.evidence.setText("已核对原文\n" + "\n".join(facts) +
                               "\n仍未知 · " + reading.get("unknown", "") +
                               "\n" + reading.get("evidence_note", "") if reading else "")
         self.nextStep.setText("下一步 · " + reading.get("next_step", "") +
@@ -1094,6 +1276,23 @@ class Overlay:
         else:
             self.set_status("这轮建议不回复；先核对原文和边界。" if reading else
                             "未生成可用回复，请等待下一条新消息。", "warning" if reading else "error")
+
+    def show_details(self, content, heading="详细分析"):
+        dialog = QDialog(self.win)
+        dialog.setWindowTitle("狗头军师 · " + heading)
+        dialog.resize(600, 650)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(_label(heading, 20, "#24382d", True))
+        editor = QPlainTextEdit(dialog)
+        editor.setReadOnly(True)
+        editor.setPlainText(content)
+        layout.addWidget(editor)
+        note = _label("模型估计仅供参考；请结合已核对原文和真实行动判断。", 11, _MUTED)
+        layout.addWidget(note)
+        close = PushButton("关闭", dialog)
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
 
     def _clear_cards(self):
         for card in self.cards:

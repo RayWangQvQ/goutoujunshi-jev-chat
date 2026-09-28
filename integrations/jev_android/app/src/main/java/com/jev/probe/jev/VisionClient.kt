@@ -9,12 +9,11 @@ import org.json.JSONObject
 
 /**
  * The vision route: an OpenAI-compatible `/chat/completions` endpoint that
- * accepts `image_url` content parts. A-stage shell only — B stage wires it to
- * the screenshot pipeline (see docs/v1.3-plan.md "OCR 分层").
+ * accepts `image_url` content parts. The screenshot pipeline uses it when cloud OCR is selected.
  *
  * Reads visionBaseUrl / visionKey / visionModel from [Prefs]. The base URL does
- * not inherit from the reply route (a DeepSeek-style host has no vision
- * endpoint); the key still falls back reply -> judge.
+ * not inherit from the reply route; the user chooses the host that receives
+ * the screenshot. Keys are reused only for the same API origin.
  *
  * Wire format notes that cost real debugging time:
  * - JPEG, not PNG: a screenshot as PNG base64 is several times larger.
@@ -27,7 +26,7 @@ class VisionClient(private val prefs: Prefs) {
 
     /**
      * Send a screenshot and get the transcribed dialog back as plain text.
-     * B stage will parse this into bubbles; A stage only proves the route works.
+     * The caller parses this into bubbles and asks the user to review them.
      *
      * @param imageBase64Jpeg base64 of a JPEG, without the `data:` prefix.
      */
@@ -40,12 +39,12 @@ class VisionClient(private val prefs: Prefs) {
     /** Generic single-question call against the image (used by the settings test). */
     fun ask(imageBase64Jpeg: String, prompt: String): String {
         val url = prefs.visionEndpoint()
-        // Image first, then text: DashScope compatible-mode requires this order.
-        val content = JSONArray()
-            .put(JSONObject()
-                .put("type", "image_url")
-                .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$imageBase64Jpeg")))
-            .put(JSONObject().put("type", "text").put("text", prompt))
+        val image = JSONObject().put("type", "image_url")
+            .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$imageBase64Jpeg"))
+        val text = JSONObject().put("type", "text").put("text", prompt)
+        // DashScope requires image first; DeepSeek's documented format puts text first.
+        val content = if (prefs.visionBaseUrl.trim().trimEnd('/') == Prefs.DEEPSEEK_BASE)
+            JSONArray().put(text).put(image) else JSONArray().put(image).put(text)
         val messages = JSONArray().put(
             JSONObject().put("role", "user").put("content", content))
         val body = JSONObject()
@@ -65,8 +64,7 @@ class VisionClient(private val prefs: Prefs) {
             return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
         }
 
-        /** DeepSeek's official API has no vision model; `image_url` is rejected. */
-        fun supportsVision(baseUrl: String): Boolean =
-            !baseUrl.contains("api.deepseek.com", ignoreCase = true)
+        /** DeepSeek Flash accepts image_url; custom hosts are checked by the request itself. */
+        fun supportsVision(baseUrl: String): Boolean = baseUrl.trim().isNotEmpty()
     }
 }

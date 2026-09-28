@@ -19,6 +19,7 @@ import com.jev.probe.core.Prefs
 import com.jev.probe.core.kb.ContextBuilder
 import com.jev.probe.core.kb.KbStore
 import com.jev.probe.jev.JevClient
+import com.jev.probe.jev.VisionClient
 import com.jev.probe.overlay.OverlayController
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -63,7 +64,10 @@ open class ChatCaptureService : AccessibilityService() {
      *  title or get saved as a contact name. Never cleared on app switch — the
      *  next real title for that package simply replaces it. */
     private val lastGoodTitle: MutableMap<String, String> = HashMap()
-    private val debounce = Runnable { runAnalysis() }
+    private val debounce = Runnable {
+        val snapshot = pendingSnapshot
+        if (snapshot != null) reviewSnapshot(snapshot, activePkg ?: foregroundPkg ?: "")
+    }
     private var pendingSnapshot: ChatSnapshot? = null
     @Volatile private var currentSnapshot: ChatSnapshot? = null
     private var foregroundPkg: String? = null
@@ -77,6 +81,9 @@ open class ChatCaptureService : AccessibilityService() {
     }
     private val ocr = MlKitOcr()
     private var ocrBusy = false
+    private var reviewPending = false
+    private var lastAnalysis: com.jev.probe.core.Analysis? = null
+    private var lastAnalyzedSnapshot: ChatSnapshot? = null
 
     /** What the screen looked like the last time we fired an automatic shot.
      *  See [ocrSignature]: this is the brake on the OCR path. */
@@ -87,7 +94,61 @@ open class ChatCaptureService : AccessibilityService() {
         prefs = Prefs(this)
         overlay = OverlayController(this)
         overlay?.onManualAnalyze = {
-            currentSnapshot?.let { pendingSnapshot = it; runAnalysis() }
+            if (!reviewPending) currentSnapshot?.let {
+                reviewSnapshot(it, activePkg ?: foregroundPkg ?: "")
+            }
+        }
+        overlay?.onDetails = {
+            val snapshot = lastAnalyzedSnapshot
+            val analysis = lastAnalysis
+            val pkg = activePkg ?: foregroundPkg ?: ""
+            if (snapshot == null || analysis == null || !snapshotIsCurrent(snapshot, pkg)) {
+                overlay?.toast("请先核对并分析当前会话")
+            } else submit {
+                val result = try { JevClient(prefs).details(snapshot, prefs.relationship, analysis) }
+                             catch (_: Exception) { "详细分析暂不可用，请检查回复模型后重试。" }
+                main.post { if (snapshotIsCurrent(snapshot, pkg)) overlay?.showDetails(result) }
+            }
+        }
+        overlay?.onExplain = { candidate ->
+            val snapshot = lastAnalyzedSnapshot
+            val analysis = lastAnalysis
+            val pkg = activePkg ?: foregroundPkg ?: ""
+            if (snapshot == null || analysis == null ||
+                analysis.rankedReplies.none { it.text == candidate } || !snapshotIsCurrent(snapshot, pkg)) {
+                overlay?.toast("请先分析当前会话")
+            } else submit {
+                val result = try { JevClient(prefs).explain(snapshot, prefs.relationship, analysis, candidate) }
+                             catch (_: Exception) { "理由与代价暂不可用，请检查回复模型后重试。" }
+                main.post { if (snapshotIsCurrent(snapshot, pkg)) overlay?.showDetails(result, "回复理由与代价") }
+            }
+        }
+        overlay?.onRewrite = {
+            val snapshot = lastAnalyzedSnapshot
+            val analysis = lastAnalysis
+            val pkg = activePkg ?: foregroundPkg ?: ""
+            if (snapshot == null || analysis == null || analysis.rankedReplies.isEmpty() ||
+                !snapshotIsCurrent(snapshot, pkg)) {
+                overlay?.toast("请先生成当前会话的候选")
+            } else {
+                overlay?.toast("正在按你的原话调整口吻…")
+                submit {
+                    val client = JevClient(prefs)
+                    try {
+                        val candidates = client.rewrite(snapshot, analysis,
+                            analysis.rankedReplies.map { it.text })
+                        val ranked = client.rerank(snapshot, prefs.relationship, analysis, candidates)
+                        main.post {
+                            if (snapshotIsCurrent(snapshot, pkg)) {
+                                lastAnalysis = analysis.copy(rankedReplies = ranked)
+                                overlay?.showReplies(ranked) { text -> fillInput(text, snapshot, pkg) }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        main.post { overlay?.toast(e.message ?: "口吻调整失败；原候选已保留") }
+                    }
+                }
+            }
         }
         // Bubble menu: file the open conversation as a knowledge-base contact.
         // Contacts are never created automatically — this is the one-tap way in.
@@ -158,6 +219,7 @@ open class ChatCaptureService : AccessibilityService() {
     }
 
     private fun maybeCapture() {
+        if (reviewPending) return
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString()
         // Apps with no adapter are never handled automatically (v1.3 revision):
@@ -193,7 +255,6 @@ open class ChatCaptureService : AccessibilityService() {
         // whose last few messages happen to match cannot swallow each other.
         if (pkg != activePkg) { activePkg = pkg; lastSignature = "" }
 
-        currentSnapshot = snapshot
         val sig = snapshot.signature()
         val showing = overlay?.isShowing() == true
         // Same content and the bubble is already up → nothing to do.
@@ -201,6 +262,7 @@ open class ChatCaptureService : AccessibilityService() {
         // Same content but the bubble is gone (killed by MIUI, or we left and came
         // back) → just put the bubble back, do NOT re-analyze (saves tokens/time).
         if (sig == lastSignature && !showing) { main.post { overlay?.showIdle(snapshot.title) }; return }
+        currentSnapshot = snapshot
         // Anything else reaching here is a genuinely different conversation (new
         // app, or new content in this one) — a leftover judgment/candidates from
         // whatever was shown before must not leak into it.
@@ -280,6 +342,8 @@ open class ChatCaptureService : AccessibilityService() {
                         emptyList()
                     }
                     finishAnalysis(snapshot, pkg) {
+                        lastAnalysis = judgment.copy(rankedReplies = ranked)
+                        lastAnalyzedSnapshot = snapshot
                         overlay?.showReplies(ranked, replyError) { text -> fillInput(text, snapshot, pkg) }
                     }
                 }
@@ -369,6 +433,10 @@ open class ChatCaptureService : AccessibilityService() {
                     if (manual || !transient) overlay?.showError(res.humanMessage)
                 }
                 is ScreenCapture.Result.Ok -> {
+                    if (prefs.ocrEngine == Prefs.OCR_VISION) {
+                        ocrCloud(res.bitmap, treeTitle, pkg, manual)
+                        return@capture
+                    }
                     ocr.scaleX = res.scaleX; ocr.scaleY = res.scaleY
                     ocr.originX = res.originX; ocr.originY = res.originY
                     if (rects.isNotEmpty() && !manual) {
@@ -381,6 +449,44 @@ open class ChatCaptureService : AccessibilityService() {
                         ocrByRects(res.bitmap, if (fresh.isNullOrEmpty()) rects else fresh, treeTitle, pkg)
                     } else ocrWholeScreen(res.bitmap, treeTitle, pkg, manual)
                 }
+            }
+        }
+    }
+
+    /** One cropped image per round, rather than a paid request for every bubble. */
+    private fun ocrCloud(bmp: Bitmap, title: String?, pkg: String, manual: Boolean) {
+        val top = (bmp.height * TOP_CROP).toInt().coerceIn(0, bmp.height - 1)
+        val bottom = (bmp.height * BOTTOM_CROP).toInt().coerceIn(top + 1, bmp.height)
+        val crop = Bitmap.createBitmap(bmp, 0, top, bmp.width, bottom - top)
+        runCatching { bmp.recycle() }
+        if (!VisionClient.supportsVision(prefs.visionBaseUrl) || prefs.effectiveVisionKey().isBlank()) {
+            runCatching { crop.recycle() }
+            ocrBusy = false
+            overlay?.showError("请配置支持图片输入的视觉接口与密钥")
+            return
+        }
+        submit {
+            val result = try {
+                val encoded = VisionClient.encodeJpeg(crop)
+                VisionClient(prefs).extractDialog(encoded)
+            } catch (_: Exception) { "" }
+            runCatching { crop.recycle() }
+            main.post {
+                if (result.isBlank()) {
+                    ocrBusy = false
+                    overlay?.showError("视觉模型未识别出聊天文字，请检查模型或改用本地 OCR")
+                    return@post
+                }
+                val messages = result.lineSequence().mapNotNull { line ->
+                    val clean = line.trim().trimStart('-', '•', ' ')
+                    when {
+                        clean.startsWith("我：") -> Msg("me", clean.removePrefix("我：").trim())
+                        clean.startsWith("对方：") -> Msg("other", clean.removePrefix("对方：").trim())
+                        else -> null
+                    }
+                }.filter { it.text.isNotBlank() }.take(60).toList()
+                finishOcrSnapshot(ChatSnapshot(title, messages,
+                    note = "视觉模型识图；原文和双方身份必须核对，截图已发送至所选服务"), pkg, manual)
             }
         }
     }
@@ -488,15 +594,30 @@ open class ChatCaptureService : AccessibilityService() {
         overlay?.resetForNewConversation()
         lastSignature = sig
 
-        val auto = prefs.ocrAutoAnalyze && prefs.autoAnalyze && snapshot.latestFrom == "other"
-        if (manual || auto) {
-            pendingSnapshot = snapshot
-            main.removeCallbacks(debounce)
-            runAnalysis()
-        } else {
-            overlay?.setNote(snapshot.note)
+        reviewSnapshot(snapshot, pkg)
+    }
+
+    /** Both tree extraction and OCR require a reviewed transcript before model calls. */
+    private fun reviewSnapshot(snapshot: ChatSnapshot, pkg: String) {
+        if (reviewPending || analyzing || !snapshotIsCurrent(snapshot, pkg)) return
+        reviewPending = true
+        overlay?.showReview(snapshot, onConfirm = { confirmed ->
+            reviewPending = false
+            val liveRoot = rootInActiveWindow
+            if (liveRoot?.packageName?.toString() != pkg) {
+                overlay?.showError("聊天应用已切换，请重新识别后再分析")
+            } else {
+                currentSnapshot = confirmed
+                pendingSnapshot = confirmed
+                main.removeCallbacks(debounce)
+                runAnalysis()
+            }
+        }, onCancel = {
+            reviewPending = false
+            pendingSnapshot = null
+            overlay?.resetForNewConversation()
             overlay?.showIdle(snapshot.title)
-        }
+        })
     }
 
     /** Fill only a verified, still-current chat input box (never sends). */

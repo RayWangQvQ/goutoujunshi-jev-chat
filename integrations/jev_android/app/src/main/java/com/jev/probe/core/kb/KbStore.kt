@@ -327,6 +327,8 @@ class KbStore private constructor(context: Context) {
                     apps = strList(o.optJSONArray("apps")),
                     relationship = o.optString("relationship"),
                     notes = o.optString("notes"),
+                    stage = o.optString("stage", "未填写"),
+                    goal = o.optString("goal", "自然接话"),
                     autoSummary = o.optString("autoSummary"),
                     updatedAt = o.optLong("updatedAt", 0L)
                 ))
@@ -380,6 +382,8 @@ class KbStore private constructor(context: Context) {
                 .put("apps", JSONArray(c.apps))
                 .put("relationship", c.relationship)
                 .put("notes", c.notes)
+                .put("stage", c.stage)
+                .put("goal", c.goal)
                 .put("autoSummary", c.autoSummary)
                 .put("updatedAt", c.updatedAt))
         }

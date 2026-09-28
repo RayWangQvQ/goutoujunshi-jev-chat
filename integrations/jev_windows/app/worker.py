@@ -10,6 +10,7 @@ import numpy as np
 
 from app.capture import Capture, chat_area, unminimize
 from app.ocr import Reader, read_title, similar
+from app import settings
 
 
 def _err(q):
@@ -87,7 +88,18 @@ def run(q, hwnd, enabled, debug_on):
                         if name != title:
                             title = name
                             q.put(("chat", title))
-                    reader = readers.setdefault(title, Reader())
+                    ocr_provider = settings.ocr_provider()
+                    if ocr_provider == "local":
+                        if title not in readers or not isinstance(readers[title], Reader):
+                            readers[title] = Reader()
+                    else:
+                        from app.cloud_ocr import CloudReader
+                        model, key = settings.ocr_model(), settings.ocr_key()
+                        old = readers.get(title)
+                        if (not isinstance(old, CloudReader) or old.provider != ocr_provider or
+                                old.model != model or old.key != key):
+                            readers[title] = CloudReader(ocr_provider, model, key)
+                    reader = readers[title]
                     lines = reader.read(full[y0:y1, x0:x1], bg)
                     new = reader.new_lines(lines)
                     if new:

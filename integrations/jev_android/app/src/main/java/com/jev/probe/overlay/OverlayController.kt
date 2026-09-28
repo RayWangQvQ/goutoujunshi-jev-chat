@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -21,10 +22,12 @@ import android.widget.TextView
 import android.widget.Toast
 import com.jev.probe.core.Analysis
 import com.jev.probe.core.ChatSnapshot
+import com.jev.probe.core.Msg
 import com.jev.probe.core.GoutouGuidance
 import com.jev.probe.core.Prefs
 import com.jev.probe.core.RankedReply
 import com.jev.probe.SettingsActivity
+import com.jev.probe.KlineActivity
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -50,6 +53,9 @@ class OverlayController(private val ctx: Context) {
     private var lp: WindowManager.LayoutParams? = null
 
     var onManualAnalyze: (() -> Unit)? = null
+    var onDetails: (() -> Unit)? = null
+    var onExplain: ((String) -> Unit)? = null
+    var onRewrite: (() -> Unit)? = null
 
     /** Bubble menu → file the open conversation as a knowledge-base contact. */
     var onSaveContact: (() -> Unit)? = null
@@ -74,6 +80,7 @@ class OverlayController(private val ctx: Context) {
     /** Set when [showReplies] was handed a draftAndRank failure, so the panel
      *  can say so instead of silently showing "（未生成候选回复）". */
     private var replyError: String? = null
+    private var reviewCancel: (() -> Unit)? = null
 
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).roundToInt()
@@ -245,6 +252,10 @@ class OverlayController(private val ctx: Context) {
         }
         menu.addView(menuItem("截屏识别一次") { root?.removeView(menu); onOcrCapture?.invoke() })
         menu.addView(menuItem("把当前会话存为联系人") { onSaveContact?.invoke(); root?.removeView(menu) })
+        menu.addView(menuItem("关系走势 K 线") {
+            root?.removeView(menu)
+            ctx.startActivity(Intent(ctx, KlineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        })
         menu.addView(menuItem("打开设置") { openSettings(); root?.removeView(menu) })
         menu.addView(menuItem("隐藏助手（本次）") { hide() })
         menu.addView(menuItem("取消") { root?.removeView(menu) })
@@ -279,6 +290,9 @@ class OverlayController(private val ctx: Context) {
             if (params.y > maxTop) params.y = maxTop
             panel?.visibility = View.VISIBLE
         } else {
+            reviewCancel?.invoke()
+            reviewCancel = null
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
             panel?.visibility = View.GONE
             params.x = collapsedX; params.y = collapsedY  // bubble returns to where it was
         }
@@ -297,6 +311,54 @@ class OverlayController(private val ctx: Context) {
         // literally blank.
         if (lastJudgment == null || contentBox?.childCount == 0) {
             setContent(listOf(bigButton("分析当前对话") { onManualAnalyze?.invoke() }))
+        }
+    }
+
+    /** OCR text is editable because both wording and speaker attribution can be wrong. */
+    fun showReview(snapshot: ChatSnapshot, onConfirm: (ChatSnapshot) -> Unit,
+                   onCancel: () -> Unit) {
+        ensureRoot()
+        reviewCancel = onCancel
+        val editor = EditText(ctx).apply {
+            setText(snapshot.messages.joinToString("\n") {
+                (if (it.side == "me") "我：" else "对方：") + it.text
+            })
+            setTextColor(Color.parseColor("#24382d"))
+            textSize = 14f
+            minLines = 7
+            maxLines = 12
+            gravity = Gravity.TOP
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = card(10, Color.WHITE, stroke = true)
+        }
+        val confirm = bigButton("确认原文并分析") {
+            val lines = editor.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val messages = lines.mapNotNull { line ->
+                when {
+                    line.startsWith("我：") -> Msg("me", line.removePrefix("我：").trim())
+                    line.startsWith("对方：") -> Msg("other", line.removePrefix("对方：").trim())
+                    else -> null
+                }
+            }
+            if (messages.size != lines.size || messages.isEmpty() || messages.any { it.text.isBlank() }) {
+                toast("每行请以“我：”或“对方：”开头，并核对内容")
+            } else {
+                reviewCancel = null
+                lp?.let { params ->
+                    params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    root?.let { runCatching { wm.updateViewLayout(it, params) } }
+                }
+                onConfirm(snapshot.copy(messages = messages,
+                    note = (snapshot.note ?: "") + " · 原文与说话人已人工核对"))
+            }
+        }
+        setContent(listOf(line("核对本轮对话", "#24382d", 16f, true),
+            hint("识别结果可能有错。修改每行的“我／对方”和正文，确认后才调用分析模型。"),
+            editor, confirm))
+        if (!expanded) toggle()
+        lp?.let { params ->
+            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            root?.let { runCatching { wm.updateViewLayout(it, params) } }
         }
     }
 
@@ -377,6 +439,15 @@ class OverlayController(private val ctx: Context) {
         render(a, generating = false)
     }
 
+    fun showDetails(text: String, heading: String = "详细分析") {
+        ensureRoot()
+        setContent(listOf(line(heading, "#24382d", 17f, true),
+            hint("分析来自当前已核对的原文；推测与事实分开看。"),
+            line(text, "#374151", 13f),
+            bigButton("返回候选回复") { lastJudgment?.let { render(it, generating = false) } }))
+        if (!expanded) toggle()
+    }
+
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
 
     fun hide() {
@@ -419,6 +490,12 @@ class OverlayController(private val ctx: Context) {
                 views.add(hint("判断把握 ${(it.confidence * 100).roundToInt()}% · 模型估计"))
             }
         }
+        a.strategy?.let { strategy ->
+            val weight = a.strategyWeights[strategy]
+            val detail = if (weight != null) "策略选择权重 ${(weight * 100).roundToInt()}%"
+                         else "策略 token 权重暂不可用"
+            views.add(hint("DeepSeek 主策略 · $strategy · $detail；不是回复成功率"))
+        }
         // Compact secondary line: needs · action · reply-now.
         val bits = ArrayList<String>()
         a.sheNeeds?.let { bits.add("要${(NEEDS[it.choice] ?: it.choice)}") }
@@ -431,8 +508,10 @@ class OverlayController(private val ctx: Context) {
             val quoted = snap.messages.takeLast(3).joinToString("\n") {
                 (if (it.side == "me") "我" else "对方") + "：「" + it.text.take(80) + "」"
             }
-            if (quoted.isNotBlank()) views.add(hint("已见原文（请核对）\n$quoted"))
-            views.add(hint("仍未知 · 仅凭屏幕片段无法确认对方内心、完整上下文和线下情况。"))
+            val facts = a.facts.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: quoted
+            if (facts.isNotBlank()) views.add(hint("已核对原文\n$facts"))
+            views.add(hint("仍未知 · " + (a.unknowns.joinToString("；").ifBlank {
+                "仅凭屏幕片段无法确认对方内心、完整上下文和线下情况。" })))
             val boundary = GoutouGuidance.explicitBoundary(snap)
             views.add(line("军师建议 · " + (if (boundary) "尊重停止联系要求" else
                 (ACTION[a.bestAction?.choice] ?: "先核对原文")), "#2B5245", 13f, true))
@@ -443,7 +522,7 @@ class OverlayController(private val ctx: Context) {
         }
 
         views.add(divider())
-        views.add(line("候选回复排序（Jev）", "#68776F", 12f))
+        views.add(line("候选回复排序（${if (a.strategy != null) "DeepSeek" else "Jev"}）", "#68776F", 12f))
         if (generating) {
             views.add(hint("生成中…"))
         } else {
@@ -461,6 +540,11 @@ class OverlayController(private val ctx: Context) {
             }
         }
         views.add(reAnalyzeBtn())
+        if (!generating) {
+            views.add(pill("详细分析", false) { onDetails?.invoke() })
+            if (a.rankedReplies.isNotEmpty())
+                views.add(pill("更像我一点", false) { onRewrite?.invoke() })
+        }
 
         setContent(views)
         if (!expanded) toggle()
@@ -497,7 +581,7 @@ class OverlayController(private val ctx: Context) {
             ).apply { topMargin = dp(6) }
         }
         c.addView(TextView(ctx).apply {
-            this.text = if (pct > 0) "#$rank · ${pct}%" else "#$rank · 排序待定"
+            this.text = if (pct > 0) "#$rank · 相对权重 ${pct}%" else "#$rank · 排序待定"
             setTextColor(Color.parseColor("#2B5245")); textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
         })
@@ -510,6 +594,7 @@ class OverlayController(private val ctx: Context) {
         // Fill, then collapse so the input box + keyboard are visible to review/send.
         btns.addView(pill("填入", true) { android.util.Log.d("JEVASSIST", "overlay: fill tapped"); onFill(text); if (expanded) toggle() })
         c.addView(btns)
+        c.addView(pill("为什么这样回", false) { onExplain?.invoke(text) })
         return c
     }
 

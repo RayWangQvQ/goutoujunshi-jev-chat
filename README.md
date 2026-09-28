@@ -18,17 +18,17 @@
 | Windows | [`goutoujunshi-jev-chat-windows-preview.zip`](https://github.com/shengjidaguai-china/goutoujunshi-jev-chat/releases/latest/download/goutoujunshi-jev-chat-windows-preview.zip) | 可执行目录 ZIP；自动构建通过 |
 | Android | [`goutoujunshi-jev-chat-android-debug.apk`](https://github.com/shengjidaguai-china/goutoujunshi-jev-chat/releases/latest/download/goutoujunshi-jev-chat-android-debug.apk) | Android 11+ 调试预览包。**目前无法截取微信聊天画面，暂不支持微信。**  |
 
-各端功能范围目前不同：下方截图和完整的原文核对、关系档案、关系 K 线属于 Mac 版；Windows 已接入聊天识别、Jev 判断和候选回复流程；Android 提供悬浮窗、判断和候选回复的调试预览，尚未移植 Mac 的完整界面。详见 [Windows 使用说明](integrations/jev_windows/README.md)和 [Android 使用说明](integrations/jev_android/README.md)。
+三端现已接入核对原文、Jev／DeepSeek 策略判断、候选排序、详细分析、口吻改写、关系阶段与目标，以及 K 线示例和聊天 CSV 导入。截图展示的是 Mac 界面，Windows 和 Android 的布局及采集能力仍有差异；Android 微信截图目前不可用。各端的操作与已知限制见 [Windows 使用说明](integrations/jev_windows/README.md)和 [Android 使用说明](integrations/jev_android/README.md)。
 
 ### Android：安装调试 APK
 
-在 Android 11 或更新版本上下载 APK，允许系统安装此来源的应用后安装。打开应用，分别配置判断与回复接口，并按界面提示授予无障碍、悬浮窗权限；首次安装时助手和自动分析默认关闭，需要主动开启。**当前 Android 预览版无法截取微信聊天画面，所以微信暂不支持。** 请勿把 Mac 版微信旁的截图理解为 Android 效果；QQ、X、飞书等路径也仍需在对应设备上验证。应用只生成草稿，发送由你决定。
+在 Android 11 或更新版本上下载 APK，允许系统安装此来源的应用后安装。打开应用，选择 Jev 或 DeepSeek 策略判断，配置回复模型；截图识图可选本地 ML Kit 或视觉模型（DeepSeek Flash、OpenRouter 等）。按界面提示授予无障碍、悬浮窗权限；首次安装时助手和自动分析默认关闭，需要主动开启。识别后先核对原文与双方身份，再确认分析。**当前 Android 预览版无法截取微信聊天画面，所以微信暂不支持。** 请勿把 Mac 版微信旁的截图理解为 Android 效果；QQ、X、飞书等路径也仍需在对应设备上验证。应用只生成草稿，发送由你决定。
 
 ### Windows：解压 ZIP
 
 适用于 Windows 10 1903 及以上或 Windows 11，目标聊天应用为微信 Windows 4.x。下载预览 ZIP，**完整解压**后进入 `goutoujunshi-jev-chat-windows` 文件夹，运行 `goutoujunshi-jev-chat-windows.exe`；这个打包版本无需另装 Python。
 
-首次打开设置，分别配置 **Jev 判断接口**和**回复生成接口**，然后打开要处理的微信会话，保持聊天窗口可见，再使用悬浮窗读取和分析。候选可以复制或填入草稿；填入依赖当前窗口位置，使用前请确认会话、收件人和草稿内容，最后由你自己发送。此包尚待 Windows 实机验收。[Windows 使用说明](integrations/jev_windows/README.md)还列出了源码运行方式。
+首次打开设置，选择 **Jev 或 DeepSeek 策略判断**，配置回复生成接口；识图可选 RapidOCR 本地、DeepSeek 或 OpenRouter。打开要处理的微信会话，保持聊天窗口可见；新消息出现后先点「核对原文并分析」，修正文字和说话人，再看候选。可打开详细分析、改写口吻、设置当前会话的阶段与目标，或在 K 线窗口导入聊天 CSV。候选可以复制或填入草稿；填入依赖当前窗口位置，使用前请确认会话、收件人和草稿内容，最后由你自己发送。此包尚待 Windows 实机验收。[Windows 使用说明](integrations/jev_windows/README.md)还列出了源码运行方式。
 
 ### macOS：运行源码预览包
 
@@ -105,7 +105,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 ## 自检与使用边界
 
-2026 年 9 月 28 日加入 DeepSeek 策略判断与权重校验后，102 项 Python 测试与 Mac 接口配置窗口构建检查通过；此前 Mac 与 Windows 自动构建及 Mac ZIP 解压启动检查于 9 月 24 日通过。可以在本地复查：
+2026 年 9 月 28 日加入跨端策略、核对和关系功能后，Python 测试、Android 调试包构建与单元测试通过；Windows 实机运行仍待验收。可以在本地复查：
 
 ```bash
 python3 -B scripts/validate_skill.py
