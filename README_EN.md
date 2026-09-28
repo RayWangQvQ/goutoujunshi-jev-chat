@@ -22,7 +22,7 @@ All three builds now include transcript review, Jev or DeepSeek strategy judgmen
 
 ### Android: install the debug APK
 
-On Android 11 or later, download the APK and allow installation from that source when prompted. Select Jev or DeepSeek for strategy judgment, configure a reply model, and choose local ML Kit or an image model (DeepSeek Flash, OpenRouter, or another compatible endpoint) for screenshot recognition. Grant Accessibility and overlay permissions as guided. The assistant and automatic analysis start disabled. Check recognized text and speakers before confirming analysis. **This Android preview cannot currently capture WeChat chat screenshots, so it does not support WeChat.** QQ, X, and Feishu paths still require validation on actual devices. The app drafts replies; you decide whether to send them.
+On Android 11 or later, download the APK and allow installation from that source when prompted. An older debug APK may have a different temporary signing certificate; if Android rejects an update, uninstall the old build first (which clears its local app settings). Select Jev or DeepSeek for strategy judgment, configure a reply model, and choose local ML Kit or an image model (DeepSeek Flash, OpenRouter, or another compatible endpoint) for screenshot recognition. Grant Accessibility and overlay permissions as guided. The assistant and automatic analysis start disabled. Check recognized text and speakers before confirming analysis. **This Android preview cannot currently capture WeChat chat screenshots, so it does not support WeChat.** QQ, X, and Feishu paths still require validation on actual devices. The app drafts replies; you decide whether to send them.
 
 ### Windows: extract the ZIP
 

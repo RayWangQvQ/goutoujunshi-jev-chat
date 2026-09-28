@@ -125,7 +125,7 @@ jobs:
 
           - **macOS:** `goutoujunshi-jev-chat-mac.zip` — source package. Install Python 3.12 and uv, then run `安装依赖.command` and `启动.command`. This is not a signed `.app`.
           - **Windows:** `goutoujunshi-jev-chat-windows-preview.zip` — extract the complete directory before launching the executable. Automated build passes; physical-device validation is pending.
-          - **Android:** `goutoujunshi-jev-chat-android-debug.apk` — Android 11+ debug preview. **WeChat is currently unsupported because this Android build cannot capture WeChat chat screenshots.** Other chat-app paths still need device-level validation.
+          - **Android:** `goutoujunshi-jev-chat-android-debug.apk` — Android 11+ debug preview. An older debug APK may have a different signing certificate; uninstall it first if Android rejects the update (this clears local app data). **WeChat is currently unsupported because this Android build cannot capture WeChat chat screenshots.** Other chat-app paths still need device-level validation.
 
           Transcript review, Jev/DeepSeek strategy selection, ranked drafts, detailed analysis, style rewrite, relationship stage/goal, and example/CSV K-line views are included across the three platforms. UI layouts and capture support differ; the screenshots in the README show Mac. Check `SHA256SUMS.txt` after downloading. See the README and PRIVACY.md for setup, feature scope, and data use.
 
