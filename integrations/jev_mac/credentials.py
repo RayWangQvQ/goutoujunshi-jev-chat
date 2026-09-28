@@ -1,4 +1,4 @@
-"""Write only the two project-specific API keys to the macOS login Keychain.
+"""Write only project-specific API keys to the macOS login Keychain.
 
 The password is sent to ``security`` over stdin, never as a process argument,
 printed message, plaintext settings file, or repository file.
@@ -8,11 +8,12 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from client import KEYCHAIN_SERVICE as DEEPSEEK_SERVICE
+from client import KEYCHAIN_SERVICE as DEEPSEEK_SERVICE, OPENROUTER_KEYCHAIN_SERVICE
 from jev import KEYCHAIN_SERVICE as JEV_SERVICE
 
 
-SERVICES = {'deepseek': DEEPSEEK_SERVICE, 'jev': JEV_SERVICE}
+SERVICES = {'deepseek': DEEPSEEK_SERVICE, 'jev': JEV_SERVICE,
+            'openrouter': OPENROUTER_KEYCHAIN_SERVICE}
 SECURITY = '/usr/bin/security'
 
 
@@ -20,7 +21,7 @@ def _service(provider: str) -> str:
     try:
         return SERVICES[provider]
     except (KeyError, TypeError):
-        raise ValueError('只允许配置本项目的 DeepSeek 或 Jev 密钥') from None
+        raise ValueError('只允许配置本项目的 DeepSeek、OpenRouter 或 Jev 密钥') from None
 
 
 def _run(args: list[str], *, input_text: str | None = None) -> int:

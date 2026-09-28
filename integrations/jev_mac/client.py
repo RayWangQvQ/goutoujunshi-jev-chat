@@ -14,6 +14,9 @@ DEEPSEEK_BASE = "https://api.deepseek.com"
 DEEPSEEK_BASES = (DEEPSEEK_BASE, DEEPSEEK_BASE + "/v1")
 DEEPSEEK_MODEL = "deepseek-flash"
 KEYCHAIN_SERVICE = "ai.goutoujunshi.deepseek"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "openrouter/free"
+OPENROUTER_KEYCHAIN_SERVICE = "ai.goutoujunshi.openrouter"
 
 
 def read_deepseek_keychain():
@@ -32,11 +35,49 @@ def read_deepseek_keychain():
     return result.stdout.strip()
 
 
+def read_openrouter_keychain():
+    if sys.platform != "darwin":
+        return ""
+    try:
+        result = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-a", "default",
+             "-s", OPENROUTER_KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("无法读取 OpenRouter 钥匙串条目") from None
+    if result.returncode == 44:
+        return ""
+    if result.returncode:
+        raise ValueError("OpenRouter 钥匙串访问失败")
+    return result.stdout.strip()
+
+
 @dataclass(frozen=True)
 class Config:
     base: str
     model: str
     key: str = field(repr=False)
+
+    @classmethod
+    def openrouter(cls, model=OPENROUTER_MODEL):
+        model = model.strip() if isinstance(model, str) else ""
+        if not model or len(model) > 160:
+            raise ValueError("请填写有效的 OpenRouter 模型 ID")
+        key = read_openrouter_keychain()
+        if not key:
+            raise ValueError("请先在“配置接口”中保存 OpenRouter Key")
+        return cls(OPENROUTER_BASE, model, key)
+
+    @classmethod
+    def for_preferences(cls, saved):
+        overridden = any(name in os.environ for name in
+                         ("GOUTOU_API_BASE", "GOUTOU_MODEL", "GOUTOU_API_KEY"))
+        if not overridden and saved.get('reply_provider') == 'openrouter':
+            model = saved.get('model') if saved.get('base') == OPENROUTER_BASE else OPENROUTER_MODEL
+            return cls.openrouter(model)
+        config = cls.from_env()
+        model = saved.get('model') if saved.get('base') == config.base else None
+        return cls(config.base, model, config.key) if model else config
 
     @classmethod
     def from_env(cls):
@@ -75,11 +116,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # Never forward a chat or bearer token to another host.
 
 
-def complete(config, messages):
-    body = {"model": config.model, "messages": messages, "temperature": .6,
-            "max_tokens": 2500, "stream": False}
+def complete(config, messages, *, json_mode=False, choice_logprobs=False):
+    body = {"model": config.model, "messages": messages,
+            "temperature": 1 if choice_logprobs else .6,
+            "max_tokens": 8 if choice_logprobs else 2500, "stream": False}
+    if choice_logprobs:
+        if config.base not in DEEPSEEK_BASES:
+            raise ValueError('策略 token 权重仅支持 DeepSeek 官方接口')
+        body['logprobs'] = True
+        body['top_logprobs'] = 20
     if config.base in DEEPSEEK_BASES:
-        body.update(thinking={"type": "disabled"}, response_format={"type": "json_object"})
+        body['thinking'] = {"type": "disabled"}
+    if (config.base in DEEPSEEK_BASES and not choice_logprobs) or json_mode:
+        body['response_format'] = {"type": "json_object"}
     headers = {"Content-Type": "application/json"}
     if config.key:
         headers["Authorization"] = "Bearer " + config.key
@@ -94,9 +143,12 @@ def complete(config, messages):
         data = json.loads(raw)
         if data["choices"][0].get("finish_reason") not in (None, "stop"):
             raise ValueError("模型未完整生成回复；未展示候选，请重试")
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
         if not isinstance(content, str) or not content.strip():
             raise ValueError("模型返回空内容；请检查模型是否支持普通文本输出")
+        if choice_logprobs:
+            return content, choice.get('logprobs')
         return content
     except urllib.error.HTTPError as error:
         # Provider error bodies may echo user text or credentials: never display them.

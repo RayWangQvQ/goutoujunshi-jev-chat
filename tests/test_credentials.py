@@ -9,7 +9,7 @@ import credentials
 
 
 class CredentialTests(unittest.TestCase):
-    def test_both_provider_keys_go_over_stdin_not_process_arguments(self):
+    def test_provider_keys_go_over_stdin_not_process_arguments(self):
         for provider, service in credentials.SERVICES.items():
             with self.subTest(provider=provider), patch.object(credentials.sys, 'platform', 'darwin'), \
                     patch('credentials.subprocess.run', return_value=Mock(returncode=0)) as run:

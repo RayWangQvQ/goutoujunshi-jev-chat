@@ -1,6 +1,7 @@
 """Optional native Mac companion. Run --demo for a synthetic, offline UI preview."""
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -13,8 +14,9 @@ import objc
 from Foundation import NSObject, NSTimer, NSMakeRect
 
 from overlay import ReplyOverlay
-from client import Config
+from client import Config, DEEPSEEK_BASE, DEEPSEEK_MODEL, OPENROUTER_MODEL
 from jev import JevConfig
+from deepseek_strategy import config as deepseek_strategy_config
 from pipeline import analyze_snapshot, rewrite_snapshot
 from ranking import EXPLANATION, apply_scores
 from core import Session, Snapshot, build_messages, parse_advice
@@ -92,12 +94,12 @@ class Controller(NSObject):
         else:
             try:
                 config = self.reply_config()
-                strategy = f"策略：TypeSafe {self.jev_config.model}；" if self.jev_config else ""
+                strategy = self.strategy_route_label()
                 self.route.setStringValue_(strategy + f"回复：{config.model} · {config.base}")
             except ValueError as error:
-                prefix = f"策略：TypeSafe {self.jev_config.model}；" if self.jev_config else ""
+                prefix = self.strategy_route_label()
                 self.route.setStringValue_(prefix + str(error))
-            if self.jev_error:
+            if self.jev_error and self.saved_preferences.get('strategy_provider', 'auto') != 'deepseek':
                 self.route.setStringValue_(self.jev_error)
             self.route.setToolTip_(self.route.stringValue())
         self.window.center()
@@ -249,9 +251,29 @@ class Controller(NSObject):
 
     @objc.python_method
     def reply_config(self):
-        config = Config.from_env()
-        return replace(config, model=self.reply_model_override) if (
-            self.reply_model_override and self.saved_preferences.get("base") == config.base) else config
+        return Config.for_preferences(self.saved_preferences)
+
+    @objc.python_method
+    def strategy_route_label(self):
+        provider = self.saved_preferences.get('strategy_provider', 'auto')
+        if provider == 'deepseek':
+            return f'策略：DeepSeek {DEEPSEEK_MODEL}；'
+        if self.jev_config:
+            return f'策略：TypeSafe {self.jev_config.model}；'
+        if provider == 'jev':
+            return '策略：TypeSafe Jev（待配置）；'
+        return '策略：回复模型；'
+
+    @objc.python_method
+    def strategy_configs(self):
+        provider = self.saved_preferences.get('strategy_provider', 'auto')
+        if provider == 'deepseek':
+            return None, deepseek_strategy_config()
+        if self.jev_error:
+            raise ValueError(self.jev_error)
+        if provider == 'jev' and not self.jev_config:
+            raise ValueError('请先在“配置接口”中保存 TypeSafe Jev Key')
+        return self.jev_config, None
 
     def opacityChanged_(self, sender):
         value = float(sender.doubleValue())
@@ -260,11 +282,21 @@ class Controller(NSObject):
         self.settings_screen.opacity_label.setStringValue_(f"悬浮窗不透明度：{value:.0f}%")
 
     def ocrMethodChanged_(self, sender):
-        cloud = sender.indexOfSelectedItem() == 1
+        method = preferences.OCR_METHODS[sender.indexOfSelectedItem()]
+        provider = {'deepseek': 'DeepSeek', 'openrouter': 'OpenRouter'}.get(method)
         self.settings_screen.ocr_note.setStringValue_(
-            '聊天区域截图发往 DeepSeek · 按图片计费' if cloud else '本地识别；截图不发送至 OCR 服务')
+            f'聊天区域截图发往 {provider} · 按接口用量计费' if provider
+            else '本地识别；截图不发送至 OCR 服务')
         self.settings_screen.auto.setToolTip_(
-            '开启后每次画面变化可能上传截图并产生费用' if cloud else '自动读取所选会话的可见文字')
+            '开启后每次画面变化可能上传截图并产生费用' if provider else '自动读取所选会话的可见文字')
+
+    def replyProviderChanged_(self, sender):
+        provider = self.settings_screen.selected_reply_provider()
+        model = (self.saved_preferences.get('model')
+                 if provider == self.saved_preferences.get('reply_provider', 'deepseek')
+                 else OPENROUTER_MODEL if provider == 'openrouter' else DEEPSEEK_MODEL)
+        self.settings_screen.model.setStringValue_(model or DEEPSEEK_MODEL)
+        self.settings_screen.key_status.setStringValue_('选择接口后保存设置；Key 在“配置接口”中填写')
 
     def cancelSettings_(self, sender):
         self.overlay.surface.opacity = self.opacity_value / 100
@@ -286,6 +318,7 @@ class Controller(NSObject):
         if self.provider_settings is not None:
             self.provider_settings.deepseek_key.setStringValue_('')
             self.provider_settings.jev_key.setStringValue_('')
+            self.provider_settings.openrouter_key.setStringValue_('')
             self.provider_settings.window.orderOut_(None)
 
     @objc.python_method
@@ -298,11 +331,11 @@ class Controller(NSObject):
             self.jev_error = str(error)
         try:
             config = self.reply_config()
-            prefix = f'策略：TypeSafe {self.jev_config.model}；' if self.jev_config else ''
+            prefix = self.strategy_route_label()
             self.route.setStringValue_(prefix + f'回复：{config.model} · {config.base}')
         except ValueError as error:
             self.route.setStringValue_(str(error))
-        if self.jev_error:
+        if self.jev_error and self.saved_preferences.get('strategy_provider', 'auto') != 'deepseek':
             self.route.setStringValue_(self.jev_error)
         self.route.setToolTip_(self.route.stringValue())
         if self.settings_screen is not None:
@@ -320,9 +353,9 @@ class Controller(NSObject):
             save_key(provider, value)
             control.setStringValue_('')
             self.reload_providers()
-            name = 'DeepSeek' if provider == 'deepseek' else 'Jev'
+            name = {'deepseek': 'DeepSeek', 'jev': 'Jev', 'openrouter': 'OpenRouter'}[provider]
             self.provider_settings.status.setStringValue_(
-                f'{name} Key 已保存到 Mac 钥匙串；可点“连通测试”验证接口。')
+                f'{name} Key 已保存到 Mac 钥匙串；按需选择回复或识图接口。')
         except ValueError as error:
             self.provider_settings.status.setStringValue_(str(error))
 
@@ -332,12 +365,79 @@ class Controller(NSObject):
     def saveJevKey_(self, sender):
         self.store_provider_key('jev', self.provider_settings.jev_key)
 
+    def saveOpenRouterKey_(self, sender):
+        self.store_provider_key('openrouter', self.provider_settings.openrouter_key)
+
+    def saveOpenRouterOcrModel_(self, sender):
+        if self.demo or self.busy:
+            self.provider_settings.status.setStringValue_('离线演示或当前操作进行中，不能保存识图模型')
+            return
+        model = str(self.provider_settings.openrouter_ocr_model.stringValue()).strip()
+        try:
+            if not model or len(model) > 160:
+                raise ValueError('请填写有效的 OpenRouter 识图模型 ID')
+            preferences.save(self.saved_preferences.get('model', DEEPSEEK_MODEL),
+                             self.saved_preferences.get('base', DEEPSEEK_BASE),
+                             self.opacity_value, reply=self.reply_options,
+                             ocr_method=self.ocr_method,
+                             reply_provider=self.saved_preferences.get('reply_provider', 'deepseek'),
+                             ocr_model=model,
+                             strategy_provider=self.saved_preferences.get('strategy_provider', 'auto'))
+            self.saved_preferences['ocr_model'] = model
+            self.reset_result()
+            self.provider_settings.status.setStringValue_('OpenRouter 识图模型已保存；下次读取使用')
+        except ValueError as error:
+            self.provider_settings.status.setStringValue_(str(error))
+
+    @objc.python_method
+    def activate_reply_provider(self, provider, model):
+        if self.demo or self.busy:
+            raise ValueError('离线演示或当前操作进行中，不能切换回复接口')
+        if any(name in os.environ for name in
+               ('GOUTOU_API_BASE', 'GOUTOU_MODEL', 'GOUTOU_API_KEY')):
+            raise ValueError('当前 GOUTOU_API_* 环境变量优先；请先取消这些变量再切换图形界面回复接口')
+        if provider == 'openrouter':
+            config = Config.openrouter(model)
+        else:
+            config = Config.from_env()
+            model = DEEPSEEK_MODEL if self.saved_preferences.get('reply_provider') == 'openrouter' else (
+                self.reply_model_override or DEEPSEEK_MODEL)
+            config = replace(config, model=model)
+        preferences.save(model, config.base, self.opacity_value,
+                         reply=self.reply_options, ocr_method=self.ocr_method,
+                         reply_provider=provider,
+                         ocr_model=self.saved_preferences.get('ocr_model', OPENROUTER_MODEL),
+                         strategy_provider=self.saved_preferences.get('strategy_provider', 'auto'))
+        self.saved_preferences = dict(self.saved_preferences, model=model, base=config.base,
+                                      reply_provider=provider)
+        self.reply_model_override = model
+        if self.settings_screen is not None:
+            self.settings_screen.reply_provider.selectItemAtIndex_(
+                1 if provider == 'openrouter' else 0)
+            self.settings_screen.refresh_provider_summary(reset_model=True)
+        self.reload_providers()
+
+    def useDeepSeek_(self, sender):
+        try:
+            self.activate_reply_provider('deepseek', DEEPSEEK_MODEL)
+            self.provider_settings.status.setStringValue_('已切换到 DeepSeek 回复接口')
+        except ValueError as error:
+            self.provider_settings.status.setStringValue_(str(error))
+
+    def useOpenRouter_(self, sender):
+        try:
+            self.activate_reply_provider('openrouter',
+                str(self.provider_settings.openrouter_model.stringValue()).strip())
+            self.provider_settings.status.setStringValue_('已切换到 OpenRouter 回复接口')
+        except ValueError as error:
+            self.provider_settings.status.setStringValue_(str(error))
+
     @objc.python_method
     def remove_provider_key(self, provider):
         if self.demo or self.busy:
             self.provider_settings.status.setStringValue_('离线演示或当前操作进行中，不能修改密钥')
             return
-        name = 'DeepSeek' if provider == 'deepseek' else 'Jev'
+        name = {'deepseek': 'DeepSeek', 'jev': 'Jev', 'openrouter': 'OpenRouter'}[provider]
         if not self.ask(f'移除{name}密钥？', '只删除本项目专用的 Mac 钥匙串条目。环境变量配置不会改变。', '移除'):
             return
         try:
@@ -352,6 +452,9 @@ class Controller(NSObject):
 
     def removeJevKey_(self, sender):
         self.remove_provider_key('jev')
+
+    def removeOpenRouterKey_(self, sender):
+        self.remove_provider_key('openrouter')
 
     @objc.python_method
     def ask(self, title, message, accept):
@@ -372,9 +475,23 @@ class Controller(NSObject):
             if ocr_method == 'deepseek' and not self.demo:
                 from cloud_ocr import deepseek_config
                 deepseek_config()
+            ocr_model = self.saved_preferences.get('ocr_model', OPENROUTER_MODEL)
+            if ocr_method == 'openrouter' and not self.demo:
+                from cloud_ocr import openrouter_config
+                openrouter_config(ocr_model)
             model = str(ui.model.stringValue()).strip()
             if not model or len(model) > 160:
                 raise ValueError('请填写有效的模型名')
+            provider = ui.selected_reply_provider()
+            strategy_provider = ui.selected_strategy_provider()
+            if not self.demo:
+                if strategy_provider == 'deepseek':
+                    deepseek_strategy_config()
+                elif strategy_provider == 'jev':
+                    if self.jev_error:
+                        raise ValueError(self.jev_error)
+                    if not self.jev_config:
+                        raise ValueError('请先在“配置接口”中保存 TypeSafe Jev Key')
             options = ReplyPreferences(TONES[ui.tone.selectedSegment()], str(ui.length.titleOfSelectedItem()), ui.count.indexOfSelectedItem()+1)
             profile = dict(self.conversations.current)
             profile.update(stage=str(ui.stage.titleOfSelectedItem()), goal=str(ui.goal.titleOfSelectedItem()), background=str(ui.background.stringValue()))
@@ -383,19 +500,33 @@ class Controller(NSObject):
             key = self.conversations.current_key
             if auto and (key is None or not self.confirm.state()):
                 raise ValueError('请先读取并确认当前会话的文字和说话人，再开启自动分析')
-            config = Config('https://api.deepseek.com', model, '') if self.demo else self.reply_config()
+            if self.demo:
+                config = Config(DEEPSEEK_BASE, model, '')
+            elif provider == self.saved_preferences.get('reply_provider', 'deepseek'):
+                config = self.reply_config()
+            else:
+                if any(name in os.environ for name in
+                       ('GOUTOU_API_BASE', 'GOUTOU_MODEL', 'GOUTOU_API_KEY')):
+                    raise ValueError('当前 GOUTOU_API_* 环境变量优先；请先取消后再切换回复接口')
+                config = Config.openrouter(model) if provider == 'openrouter' else Config.from_env()
             if auto and (not self.auto_gate.enabled or key not in self.auto_gate.allowed
-                         or (ocr_method == 'deepseek' and self.ocr_method != 'deepseek')):
-                image_note = 'DeepSeek OCR 还会上传聊天区域截图；' if ocr_method == 'deepseek' else ''
-                if not self.ask('开启当前会话自动分析？', f'仅对“{key[1]}”生效。{image_note}稳定的新对方消息及关系背景将发送到 TypeSafe（如已启用）和 {config.base}，可能产生 API 用量。不会自动填入或发送；重启后关闭。', '开启'):
+                         or (ocr_method in ('deepseek', 'openrouter') and self.ocr_method != ocr_method)):
+                image_note = (f'{"DeepSeek" if ocr_method == "deepseek" else "OpenRouter"} 识图还会上传聊天区域截图；'
+                              if ocr_method in ('deepseek', 'openrouter') else '')
+                strategy_destination = ('DeepSeek' if strategy_provider == 'deepseek' else
+                                        'TypeSafe' if self.jev_config else '回复模型')
+                if not self.ask('开启当前会话自动分析？', f'仅对“{key[1]}”生效。{image_note}稳定的新对方消息及关系背景将发送到 {strategy_destination} 和 {config.base}，可能产生 API 用量。不会自动填入或发送；重启后关闭。', '开启'):
                     return
             opacity = float(ui.opacity.doubleValue())
             if not self.demo:
-                preferences.save(model, config.base, opacity, reply=options, ocr_method=ocr_method)
+                preferences.save(model, config.base, opacity, reply=options, ocr_method=ocr_method,
+                                 reply_provider=provider, ocr_model=ocr_model,
+                                 strategy_provider=strategy_provider)
             self.conversations.update(profile)
             self.reply_options = options
             self.saved_preferences = dict(model=model, base=config.base, opacity=opacity,
-                                          ocr_method=ocr_method)
+                                          ocr_method=ocr_method, reply_provider=provider,
+                                          ocr_model=ocr_model, strategy_provider=strategy_provider)
             self.reply_model_override, self.opacity_value = model, opacity
             self.ocr_method = ocr_method
             self.background.setStringValue_(profile['background'])
@@ -409,7 +540,8 @@ class Controller(NSObject):
             self.reset_result()
             saved = self.memory.save_profile(profile) if not self.demo else 0
             ui.status.setStringValue_('设置已保存' + (f' · 档案更新 {saved} 项，可撤销上次保存' if saved else ' · 本轮资料未写入档案'))
-            self.route.setStringValue_(f'回复：{model} · {config.base}')
+            self.route.setStringValue_(self.strategy_route_label() + f'回复：{model} · {config.base}')
+            ui.refresh_provider_summary()
             ui.refresh_memory()
         except (ValueError, IndexError) as error:
             ui.status.setStringValue_(str(error))
@@ -529,8 +661,7 @@ class Controller(NSObject):
             show_status("离线演示不调用接口，请在正式运行时测试")
             return
         try:
-            if self.jev_error:
-                raise ValueError(self.jev_error)
+            jev_config, strategy_config = self.strategy_configs()
             config = replace(self.reply_config(), model=str(self.settings_screen.model.stringValue()).strip())
             if not config.model:
                 raise ValueError("请填写模型名")
@@ -541,7 +672,8 @@ class Controller(NSObject):
         self.settings_screen.test_button.setEnabled_(False)
         show_status("使用合成对话测试，会产生少量 API 用量…")
         def test():
-            return analyze_snapshot(Snapshot("连通测试", DEMO_TRANSCRIPT), "邀约推进", "合成测试", config, self.jev_config)
+            return analyze_snapshot(Snapshot("连通测试", DEMO_TRANSCRIPT), "邀约推进", "合成测试",
+                                    config, jev_config, deepseek_strategy_config=strategy_config)
         def done(result, error):
             self.busy = False
             self.settings_screen.test_button.setEnabled_(True)
@@ -558,9 +690,10 @@ class Controller(NSObject):
         self.analyze_(None)
 
     def autoRead_(self, sender):
-        if bool(sender.state()) and self.ocr_method == 'deepseek' and not self.ask(
-                '开启 DeepSeek 自动读屏？',
-                '聊天区域截图会在画面变化时上传至 DeepSeek，并产生图片 API 用量。', '开启'):
+        cloud = {'deepseek': 'DeepSeek', 'openrouter': 'OpenRouter'}.get(self.ocr_method)
+        if bool(sender.state()) and cloud and not self.ask(
+                f'开启 {cloud} 自动读屏？',
+                f'聊天区域截图会在画面变化时上传至 {cloud}，并产生图片 API 用量。', '开启'):
             sender.setState_(0)
             return
         self.auto_reading = bool(sender.state())
@@ -662,7 +795,8 @@ class Controller(NSObject):
             self.detail_screen.show(1)
             return
         self.busy = True
-        self.status.setStringValue_("正在读取微信窗口…" + ('聊天截图将发往 DeepSeek' if self.ocr_method == 'deepseek' else ''))
+        cloud = {'deepseek': 'DeepSeek', 'openrouter': 'OpenRouter'}.get(self.ocr_method)
+        self.status.setStringValue_("正在读取微信窗口…" + (f'聊天截图将发往 {cloud}' if cloud else ''))
         revision = self.session.revision
 
         def read():
@@ -695,7 +829,7 @@ class Controller(NSObject):
         inputs = self.inputs()
         title, transcript, scene, background = inputs
         try:
-            if self.jev_error:
+            if self.jev_error and self.saved_preferences.get('strategy_provider', 'auto') != 'deepseek':
                 raise ValueError(self.jev_error)
             captured = self.captured
             snapshot = Snapshot(title, transcript, captured.window_id if captured else 0,
@@ -720,7 +854,9 @@ class Controller(NSObject):
                     {'id': i, 'score': score} for i, score in enumerate((70, 25, 5)[:options.count])]}))
                 data['ranking_status'] = 'demo'
                 return data
-            return analyze_snapshot(snapshot, scene, background, config, self.jev_config, options)
+            jev_config, strategy_config = self.strategy_configs()
+            return analyze_snapshot(snapshot, scene, background, config, jev_config, options,
+                                    deepseek_strategy_config=strategy_config)
 
         def done(advice, error):
             self.busy = False

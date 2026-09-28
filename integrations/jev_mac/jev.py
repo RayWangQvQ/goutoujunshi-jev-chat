@@ -64,13 +64,16 @@ class JevConfig:
 @dataclass(frozen=True)
 class StrategyDecision:
     strategy: str
-    confidence: float
+    confidence: float | None
     probabilities: dict
     model: str
+    method: str = 'jev'
+    evidence: dict = field(default_factory=dict)
 
     def as_dict(self):
         return {"strategy": self.strategy, "confidence": self.confidence,
-                "probabilities": self.probabilities, "model": self.model}
+                "probabilities": self.probabilities, "model": self.model,
+                "method": self.method, "evidence": self.evidence}
 
 
 def build_request(config, snapshot, scene, background, root=ROOT):

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=working-tree; updated=2026-09-26 -->
+<!-- README_SYNC: source=working-tree; updated=2026-09-28 -->
 
 <p align="center">简体中文 · <a href="./README_EN.md">English</a></p>
 
@@ -32,7 +32,8 @@
 
 ### macOS：运行源码预览包
 
-先安装 Python 3.12 和 [`uv`](https://docs.astral.sh/uv/)，再下载并解压 Mac ZIP。依次运行包内的 `安装依赖.command`、`离线演示.command`；确认界面能打开后，运行 `启动.command`。首次使用在「设置 → 接口与模型 → 配置接口」填写并保存 **DeepSeek Key**，需要 Jev 策略判断时再填写 **TypeSafe Jev Key**。两组密钥独立配置。
+先安装 Python 3.12 和 [`uv`](https://docs.astral.sh/uv/)，再下载并解压 Mac ZIP。依次运行包内的 `安装依赖.command`、`离线演示.command`；确认界面能打开后，运行 `启动.command`。首次使用在「设置 → 接口与模型」分别选择策略判断（自动／TypeSafe Jev／DeepSeek）和回复生成（DeepSeek／OpenRouter），再点「配置接口」填写对应 Key。DeepSeek 策略判断可与 OpenRouter 回复组合。识图可以独立选 Apple Vision、DeepSeek 或 OpenRouter；云端识图各用对应的 Key。
+OpenRouter 图形配置已进入当前源码；旧版 GitHub Release ZIP 若没有 OpenRouter 卡片，请使用更新后的源码包。
 
 读取微信需在 macOS「隐私与安全性」中给**启动程序的终端**开启「屏幕录制」权限；要将候选填入草稿，再开启「辅助功能」权限。打开目标会话后，点悬浮球「读取对话」，先核对识别原文与双方身份，再确认分析。这个 ZIP 是源码预览包，尚无签名 `.app`；更详细的命令和识图选项见下方[Mac 安装与启动](#mac-安装与启动)。
 
@@ -71,7 +72,7 @@
 3. 查看对方**可能的意图**、判断把握、依据、军师建议和「候选回复排序」。打开「详细分析」可看事实、推测、未知、下一步与停止条件。
 4. 选择候选并复制，或在确认当前会话和输入控件后填入**草稿**。发送由你决定。
 
-默认使用 **Apple Vision 本地文字识别**；设置中可改为 **DeepSeek 图片识别**，此时聊天区域截图会发送至 DeepSeek 并产生接口用量。回复生成可用 DeepSeek 或自定义的 OpenAI 兼容接口。**TypeSafe Jev 是可选的策略判断层**：启用后先选策略，再由回复模型生成候选。两组 Key 分开配置，界面输入后存入本项目专用的 Mac 钥匙串条目；仓库不包含任何真实 Key。
+默认使用 **Apple Vision 本地文字识别**；设置中可改为 **DeepSeek 或 OpenRouter 图片识别**，此时聊天区域截图会发送至所选服务并产生接口用量。OpenRouter 的识图模型 ID 与回复模型 ID 分开配置，须选择支持图像输入的模型。回复生成可在界面中选择 DeepSeek 或 OpenRouter；其他 OpenAI 兼容接口仍可用环境变量。策略判断可选择自动（Jev 优先，无 Jev 时由回复模型判断）、指定 TypeSafe Jev，或指定 DeepSeek 独立判断。DeepSeek 选项先整理证据，再用三次标签轮换检查七种策略的首 token 权重；结果不稳定时标明权重不可用，继续使用已得到的 DeepSeek 证据判断。随后由回复模型生成候选。此过程会增加接口请求及用量，权重不是回复成功率。各 Key 分开配置，界面输入后存入本项目专用的 Mac 钥匙串条目；仓库不包含任何真实 Key。
 
 「判断把握」是模型对意图推测的自评；候选百分比是本轮回复的相对推荐权重。它们都不是对方的真实意图概率、回复率或关系成功率。没有可靠依据时，界面会提示无法判断。
 
@@ -94,17 +95,17 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ./start.command --demo
 ```
 
-`--demo` 使用合成对话，离线展示界面，不读取微信、不调用模型。真实使用时运行 `./start.command`；`./start.command --settings` 可直接打开设置，点击「接口与模型 → 配置接口」填写 DeepSeek Key，并按需填写 TypeSafe Jev Key。打开微信后，需要给**启动程序的终端**授予 macOS「屏幕录制」权限；使用「填入」还需要「辅助功能」权限。
+`--demo` 使用合成对话，离线展示界面，不读取微信、不调用模型。真实使用时运行 `./start.command`；`./start.command --settings` 可直接打开设置。点「配置接口」填写 OpenRouter Key；选择 OpenRouter 回复时点「用作回复」，选择 OpenRouter 识图时填写识图模型 ID、点「保存识图」，再到「读屏与悬浮窗」选 OpenRouter 图片识别并保存设置。两种用途可以独立选择。Jev Key 按需配置。打开微信后，需要给**启动程序的终端**授予 macOS「屏幕录制」权限；使用「填入」还需要「辅助功能」权限。
 
 ![狗头军师 Jev Chat 的接口配置窗口](documentation/design/provider-config-preview.png)
 
-*图：接口配置页的离线预览。DeepSeek 与 Jev 分别保存 Key；已有值不会回显，图片里没有真实密钥。*
+*图：早期接口配置页的离线预览。新版新增 OpenRouter 卡片；已有 Key 不会回显，图片里没有真实密钥。*
 
 模型、OCR、钥匙串、可选环境变量、K 线 CSV 格式和操作限制见 [Mac 使用说明](integrations/jev_mac/README.md)。
 
 ## 自检与使用边界
 
-2026 年 9 月 24 日自检：79 项 Python 测试通过；Mac 与 Windows 自动构建通过；Mac ZIP 已实际解压、安装依赖并启动离线演示。可以在本地复查：
+2026 年 9 月 28 日加入 DeepSeek 策略判断与权重校验后，102 项 Python 测试与 Mac 接口配置窗口构建检查通过；此前 Mac 与 Windows 自动构建及 Mac ZIP 解压启动检查于 9 月 24 日通过。可以在本地复查：
 
 ```bash
 python3 -B scripts/validate_skill.py

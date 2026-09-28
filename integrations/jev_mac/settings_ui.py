@@ -4,7 +4,7 @@ import AppKit as A
 from Foundation import NSMakeRect
 from overlay import ACCENT, INK, MUTED, button, color, label
 from experience import STAGES, GOALS, TONES, LENGTHS
-from client import read_deepseek_keychain
+from client import OPENROUTER_MODEL, read_deepseek_keychain, read_openrouter_keychain
 from jev import read_keychain as read_jev_keychain
 
 
@@ -80,9 +80,15 @@ class SettingsScreen:
         label(doc, '让建议贴合你的关系、目标和说话方式', (25, 704, 800, 25), 14, tint=MUTED)
         route = card(doc, 24, 424, 438, 264, '接口与模型')
         label(route, '策略判断', (20, 163, 96, 25), 14)
-        self.strategy = label(route, '', (117, 149, 300, 48), 14)
+        self.strategy_provider = popup(route, ('自动 · Jev 优先', 'TypeSafe · Jev', 'DeepSeek'),
+                                       (117, 162, 298, 30))
+        self.strategy_provider.setEnabled_(not owner.demo)
+        self.strategy = label(route, '', (117, 139, 300, 24), 11, tint=MUTED)
         label(route, '回复生成', (20, 110, 96, 25), 14)
-        self.model = field(route, '', (117, 108, 298, 30))
+        self.reply_provider = popup(route, ('DeepSeek', 'OpenRouter'),
+                                    (117, 108, 123, 30), owner, 'replyProviderChanged:')
+        self.reply_provider.setEnabled_(not owner.demo)
+        self.model = field(route, '', (246, 108, 169, 30))
         self.route = label(route, '', (20, 68, 395, 30), 11, tint=MUTED)
         self.key_status = label(route, '', (20, 19, 148, 35), 11, tint=MUTED)
         self.provider_button = button(route, owner, '配置接口', 'configureProviders:', (175, 21, 109, 35))
@@ -116,7 +122,8 @@ class SettingsScreen:
         label(reply, '事实 · 推测 · 未知 · 下一步 · 停止条件', (20, 20, 396, 28), 13)
         reading = card(doc, 478, 113, 438, 295, '读屏与悬浮窗')
         label(reading, '识别方式', (20, 211, 95, 24), 14)
-        self.ocr_method = popup(reading, ('Apple Vision · 本地', 'DeepSeek · 图片识别'),
+        self.ocr_method = popup(reading, ('Apple Vision · 本地', 'DeepSeek · 图片识别',
+                                          'OpenRouter · 图片识别'),
                                 (121, 207, 295, 32), owner, 'ocrMethodChanged:')
         self.ocr_note = label(reading, '本地识别；截图不发送至 OCR 服务', (20, 194, 396, 13), 10, tint=MUTED)
         self.auto = A.NSButton.alloc().initWithFrame_(NSMakeRect(20, 164, 396, 30))
@@ -172,6 +179,11 @@ class SettingsScreen:
             self.memory_status.setStringValue_(str(error))
 
     def show(self):
+        self.strategy_provider.selectItemAtIndex_(
+            ('auto', 'jev', 'deepseek').index(self.owner.saved_preferences.get('strategy_provider', 'auto')))
+        self.reply_provider.selectItemAtIndex_(
+            1 if not self.owner.demo and
+            self.owner.saved_preferences.get('reply_provider') == 'openrouter' else 0)
         self.refresh_provider_summary(reset_model=True)
         self.refresh_subjects()
         self.refresh_profile()
@@ -180,7 +192,7 @@ class SettingsScreen:
         self.tone.setSelectedSegment_(TONES.index(options.tone))
         self.length.selectItemWithTitle_(options.length)
         self.count.selectItemAtIndex_(options.count-1)
-        self.ocr_method.selectItemAtIndex_(0 if self.owner.ocr_method == 'vision' else 1)
+        self.ocr_method.selectItemAtIndex_(('vision', 'deepseek', 'openrouter').index(self.owner.ocr_method))
         self.owner.ocrMethodChanged_(self.ocr_method)
         self.opacity.setDoubleValue_(self.owner.opacity_value)
         self.opacity_label.setStringValue_(f'悬浮窗不透明度：{self.owner.opacity_value:.0f}%')
@@ -195,13 +207,16 @@ class SettingsScreen:
     def refresh_provider_summary(self, reset_model=False):
         if self.owner.demo:
             self.model.setStringValue_('deepseek-flash')
-            self.strategy.setStringValue_('TypeSafe · Jev 1.13.0\n离线演示')
+            self.strategy.setStringValue_('离线演示')
             self.key_status.setStringValue_('离线演示')
             self.route.setStringValue_('合成示例，不调用模型接口')
             return
+        provider = self.owner.saved_preferences.get('strategy_provider', 'auto')
         self.strategy.setStringValue_(
+            'DeepSeek · 独立判断' if provider == 'deepseek' else
             'TypeSafe · ' + self.owner.jev_config.model if self.owner.jev_config else
-            (self.owner.jev_error or '由回复模型选策略'))
+            (self.owner.jev_error or ('请先配置 Jev Key' if provider == 'jev'
+                                      else '由回复模型选策略')))
         try:
             config = self.owner.reply_config()
             if reset_model or not str(self.model.stringValue()).strip():
@@ -212,13 +227,19 @@ class SettingsScreen:
             self.key_status.setStringValue_('回复接口待配置')
             self.route.setStringValue_(str(error))
 
+    def selected_reply_provider(self):
+        return 'openrouter' if self.reply_provider.indexOfSelectedItem() == 1 else 'deepseek'
+
+    def selected_strategy_provider(self):
+        return ('auto', 'jev', 'deepseek')[self.strategy_provider.indexOfSelectedItem()]
+
 
 class ProviderSettingsScreen:
-    """Two masked Keychain inputs; existing secrets are never placed in fields."""
+    """Masked Keychain inputs; existing secrets are never placed in fields."""
 
     def __init__(self, owner):
         self.owner = owner
-        width, height = 650, 520
+        width, height = 650, 700
         self.window = A.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, width, height), A.NSWindowStyleMaskTitled | A.NSWindowStyleMaskClosable,
             A.NSBackingStoreBuffered, False)
@@ -229,27 +250,40 @@ class ProviderSettingsScreen:
         view = self.window.contentView()
         view.setWantsLayer_(True)
         view.layer().setBackgroundColor_(color(0xF2F1EC).CGColor())
-        label(view, '接口配置', (28, 467, 570, 36), 26, True)
+        label(view, '接口配置', (28, 647, 570, 36), 26, True)
         label(view, '在这里直接保存密钥到 Mac 钥匙串；不会写进项目文件。',
-              (28, 437, 580, 23), 13, tint=MUTED)
+              (28, 617, 580, 23), 13, tint=MUTED)
 
-        deepseek = card(view, 24, 269, 602, 155, 'DeepSeek · 回复生成 / 可选图片识别')
-        label(deepseek, '官方接口 api.deepseek.com · 回复模型在主设置页选择',
+        deepseek = card(view, 24, 445, 602, 155, 'DeepSeek · 回复 / 策略 / 图片识别')
+        label(deepseek, '官方接口 api.deepseek.com · 策略判断在主设置页选择',
               (20, 87, 560, 22), 12, tint=MUTED)
         self.deepseek_key = secure_field(deepseek, (20, 45, 350, 32))
         button(deepseek, owner, '保存 Key', 'saveDeepSeekKey:', (380, 45, 95, 32), True)
         button(deepseek, owner, '移除', 'removeDeepSeekKey:', (485, 45, 92, 32))
-        self.deepseek_status = label(deepseek, '', (20, 12, 560, 27), 12, tint=MUTED)
+        self.deepseek_status = label(deepseek, '', (20, 12, 420, 27), 12, tint=MUTED)
+        button(deepseek, owner, '用作回复', 'useDeepSeek:', (462, 9, 115, 30))
 
-        jev = card(view, 24, 95, 602, 155, 'TypeSafe · Jev 策略判断（可选）')
+        openrouter = card(view, 24, 231, 602, 195, 'OpenRouter · 回复 / 图片识别')
+        label(openrouter, '回复模型', (20, 113, 90, 25), 12)
+        self.openrouter_model = field(openrouter, OPENROUTER_MODEL, (114, 113, 463, 29))
+        label(openrouter, '识图模型', (20, 78, 90, 25), 12)
+        self.openrouter_ocr_model = field(openrouter, OPENROUTER_MODEL, (114, 78, 338, 29))
+        button(openrouter, owner, '保存识图', 'saveOpenRouterOcrModel:', (462, 78, 115, 29))
+        self.openrouter_key = secure_field(openrouter, (20, 39, 350, 32))
+        button(openrouter, owner, '保存 Key', 'saveOpenRouterKey:', (380, 39, 101, 32), True)
+        button(openrouter, owner, '移除', 'removeOpenRouterKey:', (490, 39, 87, 32))
+        self.openrouter_status = label(openrouter, '', (20, 9, 422, 27), 12, tint=MUTED)
+        button(openrouter, owner, '用作回复', 'useOpenRouter:', (462, 7, 115, 30))
+
+        jev = card(view, 24, 78, 602, 133, 'TypeSafe · Jev 策略判断（可选）')
         label(jev, '官方接口 api.typesafe.ai · 当前模型 jev-1.13.0',
-              (20, 87, 560, 22), 12, tint=MUTED)
-        self.jev_key = secure_field(jev, (20, 45, 350, 32))
-        button(jev, owner, '保存 Key', 'saveJevKey:', (380, 45, 95, 32), True)
-        button(jev, owner, '移除', 'removeJevKey:', (485, 45, 92, 32))
-        self.jev_status = label(jev, '', (20, 12, 560, 27), 12, tint=MUTED)
+              (20, 68, 560, 22), 12, tint=MUTED)
+        self.jev_key = secure_field(jev, (20, 35, 350, 32))
+        button(jev, owner, '保存 Key', 'saveJevKey:', (380, 35, 95, 32), True)
+        button(jev, owner, '移除', 'removeJevKey:', (485, 35, 92, 32))
+        self.jev_status = label(jev, '', (20, 5, 560, 27), 12, tint=MUTED)
 
-        self.status = label(view, '保存后可点“连通测试”；测试会调用接口并产生少量用量。',
+        self.status = label(view, '切换回复接口后可点“连通测试”；测试会调用接口并产生用量。',
                             (28, 22, 425, 48), 11, tint=MUTED)
         button(view, owner, '连通测试', 'testConnection:', (451, 29, 98, 36))
         button(view, owner, '关闭', 'closeProviderSettings:', (558, 29, 68, 36))
@@ -258,22 +292,32 @@ class ProviderSettingsScreen:
     def refresh_status(self):
         if self.owner.demo:
             self.deepseek_status.setStringValue_('离线演示 · 不访问钥匙串')
+            self.openrouter_status.setStringValue_('离线演示 · 不访问钥匙串')
             self.jev_status.setStringValue_('离线演示 · 不访问钥匙串')
             return
+        override = any(name in os.environ for name in
+                       ('GOUTOU_API_BASE', 'GOUTOU_MODEL', 'GOUTOU_API_KEY'))
         try:
             stored = bool(read_deepseek_keychain())
-            override = any(name in os.environ for name in
-                           ('GOUTOU_API_BASE', 'GOUTOU_MODEL', 'GOUTOU_API_KEY'))
             self.deepseek_status.setStringValue_(
                 ('钥匙串已保存' if stored else '钥匙串未配置') +
                 (' · 当前环境变量优先；仅官方 DeepSeek 路由可用此 Key' if override else ' · 可直接用于官方接口'))
         except ValueError as error:
             self.deepseek_status.setStringValue_(str(error))
         try:
+            stored = bool(read_openrouter_keychain())
+            active = self.owner.saved_preferences.get('reply_provider') == 'openrouter'
+            self.openrouter_status.setStringValue_(
+                ('钥匙串已保存' if stored else '钥匙串未配置') +
+                (' · 环境变量当前优先' if override else
+                 ' · 当前回复接口' if active else ' · 尚未启用'))
+        except ValueError as error:
+            self.openrouter_status.setStringValue_(str(error))
+        try:
             stored = bool(read_jev_keychain())
             suffix = (' · 环境变量已关闭 Jev' if os.environ.get('GOUTOU_JEV_ENABLED') == '0'
                       else ' · 当前环境变量 Key 优先' if os.environ.get('GOUTOU_JEV_API_KEY')
-                      else ' · 保存后自动启用策略层')
+                      else ' · 可在主设置页选用')
             self.jev_status.setStringValue_(('钥匙串已保存' if stored else '钥匙串未配置') + suffix)
         except ValueError as error:
             self.jev_status.setStringValue_(str(error))
@@ -281,6 +325,13 @@ class ProviderSettingsScreen:
     def show(self):
         self.deepseek_key.setStringValue_('')
         self.jev_key.setStringValue_('')
+        self.openrouter_key.setStringValue_('')
+        saved = self.owner.saved_preferences
+        main = self.owner.settings_screen
+        self.openrouter_model.setStringValue_(
+            str(main.model.stringValue()) if main and main.selected_reply_provider() == 'openrouter'
+            else saved['model'] if saved.get('reply_provider') == 'openrouter' else OPENROUTER_MODEL)
+        self.openrouter_ocr_model.setStringValue_(saved.get('ocr_model', OPENROUTER_MODEL))
         self.refresh_status()
         show_window(self.window)
 

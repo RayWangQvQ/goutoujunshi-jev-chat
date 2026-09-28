@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=working-tree; updated=2026-09-26 -->
+<!-- README_SYNC: source=working-tree; updated=2026-09-28 -->
 
 <p align="center"><a href="./README.md">简体中文</a> · English</p>
 
@@ -32,7 +32,7 @@ In Settings, configure the **Jev judgment** and **reply generation** endpoints s
 
 ### macOS: run the source preview
 
-Install Python 3.12 and [`uv`](https://docs.astral.sh/uv/), then download and extract the Mac ZIP. Run `安装依赖.command`, followed by `离线演示.command` to check that the interface opens. Run `启动.command` for normal use. In “Settings → Interfaces and models → Configure interfaces,” save a **DeepSeek key** and, if you want Jev strategy judgment, a separate **TypeSafe Jev key**.
+Install Python 3.12 and [`uv`](https://docs.astral.sh/uv/), then download and extract the Mac ZIP. Run `安装依赖.command`, followed by `离线演示.command` to check that the interface opens. Run `启动.command` for normal use. In “Settings → Interfaces and models,” choose a strategy provider (automatic, TypeSafe Jev, or DeepSeek) and a reply provider (DeepSeek or OpenRouter), then open “Configure interfaces” to save the corresponding keys. DeepSeek strategy judgment can be paired with OpenRouter replies. Image recognition can independently use Apple Vision, DeepSeek, or OpenRouter; the cloud options each use their own key. The new settings are in the current source; an older Release ZIP may lack them.
 
 Grant the **terminal that launches the app** Screen Recording permission in macOS Privacy & Security. Filling a chat draft also requires Accessibility permission. Open the intended conversation, choose “Read conversation” from the floating bubble, verify the recognized transcript and speakers, and confirm analysis. This ZIP is a source preview, not a signed `.app`. More commands and OCR options are in [Install and run](#install-and-run) below.
 
@@ -71,7 +71,7 @@ These screenshots show the Mac version. Synthetic demo data is labeled separatel
 3. Review the possible intent, confidence estimate, evidence, advice, and ranked reply drafts. Open “Detailed analysis” for facts, hypotheses, unknowns, next steps, and stop conditions.
 4. Copy a draft or fill the verified chat input. You decide when and whether to send it.
 
-**Apple Vision** performs local text recognition by default. You can opt into **DeepSeek image recognition**; that mode sends a cropped chat screenshot to DeepSeek and incurs API usage. DeepSeek or a configured OpenAI-compatible endpoint generates reply drafts. **TypeSafe Jev is an optional strategy layer**: when enabled, it chooses a strategy before the reply model generates drafts. The two API keys are configured separately through the UI and stored in dedicated Mac Keychain entries. No real keys are included in this repository.
+**Apple Vision** performs local text recognition by default. You can opt into **DeepSeek or OpenRouter image recognition**; those modes send a cropped chat screenshot to the selected service and incur API usage. OpenRouter has a separate image-model field that requires an image-capable model. The Mac form can select DeepSeek or OpenRouter for reply drafts; other OpenAI-compatible endpoints remain available through environment variables. Strategy judgment can remain automatic (Jev when configured, otherwise the reply model), use Jev explicitly, or call DeepSeek independently before drafting. The DeepSeek path extracts evidence, then checks first-token `logprobs` across three rotated A–G label mappings; it shows seven relative strategy weights only when the choices agree and all labels are present. Otherwise it keeps the evidence-based DeepSeek judgment and marks weights unavailable. These extra requests add latency and usage; weights are not reply-success probabilities. Keys are stored in separate Mac Keychain entries. No real keys are included in this repository.
 
 Intent confidence is the reply model's uncalibrated self-assessment. Candidate percentages are relative recommendation weights within the current set of drafts. Neither is a verified probability of intent, reply rate, or relationship outcome. The app shows an unknown state when the evidence is insufficient.
 
@@ -94,17 +94,17 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ./start.command --demo
 ```
 
-`--demo` uses a synthetic conversation and stays offline: it neither reads WeChat nor calls a model. For real use, run `./start.command`. Run `./start.command --settings` to open settings directly, then use “Interfaces and models → Configure interfaces” to save a DeepSeek key and, optionally, a TypeSafe Jev key. Grant the launching terminal macOS Screen Recording permission. Filling a draft also requires Accessibility permission.
+`--demo` uses a synthetic conversation and stays offline: it neither reads WeChat nor calls a model. For real use, run `./start.command`. Run `./start.command --settings` to open settings directly, then use “Interfaces and models → Configure interfaces.” Save the OpenRouter key there. For replies, click “Use for replies”; for image recognition, save a separate image model ID, then select OpenRouter image recognition under “Screen reading and overlay.” These choices are independent. Grant the launching terminal macOS Screen Recording permission. Filling a draft also requires Accessibility permission.
 
 ![Offline preview of the provider configuration window](documentation/design/provider-config-preview.png)
 
-*Offline preview of the provider settings. DeepSeek and Jev keys are saved separately. Stored values are never shown in the form, and this image contains no real key.*
+*Earlier offline preview of the provider settings. The current form adds an OpenRouter card. Stored keys are never shown, and this image contains no real key.*
 
 For models, OCR choices, Keychain and environment configuration, CSV format, and operating limits, see the [Mac usage guide](integrations/jev_mac/README.md) (Chinese).
 
 ## Verification and status
 
-As checked on September 24, 2026: 79 Python tests passed; the Mac and Windows automated builds passed; and the Mac ZIP was extracted, its dependencies installed, and its offline demo launched. To repeat the local checks:
+On September 28, 2026, 102 Python tests and a Mac provider-window construction check passed after the DeepSeek strategy judgment and weight-validation change. The Mac and Windows automated builds and Mac ZIP extraction and demo checks previously passed on September 24. To repeat the local checks:
 
 ```bash
 python3 -B scripts/validate_skill.py

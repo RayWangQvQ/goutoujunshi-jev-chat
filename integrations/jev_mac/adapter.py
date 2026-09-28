@@ -16,13 +16,20 @@ def capture(method='vision', reuse_unchanged=False):
         result = read_conversation(deepseek_config(), max_messages=20,
                                    reuse_unchanged=reuse_unchanged)
         source = 'deepseek_ocr'
+    elif method == 'openrouter':
+        from cloud_ocr import openrouter_config, read_conversation
+        import preferences
+        model = preferences.load().get('ocr_model', 'openrouter/free')
+        result = read_conversation(openrouter_config(model), max_messages=20,
+                                   reuse_unchanged=reuse_unchanged)
+        source = 'openrouter_ocr'
     else:
         raise ValueError('请选择有效的 OCR 识别方式')
     return from_capture(result, source=source), result.get("window")
 
 
 def fill_reply(original, text):
-    method = 'deepseek' if original.source == 'deepseek_ocr' else 'vision'
+    method = {'deepseek_ocr': 'deepseek', 'openrouter_ocr': 'openrouter'}.get(original.source, 'vision')
     current, window = capture(method=method)
     assert_fill_target(original, current)
     if not fill.has_accessibility():

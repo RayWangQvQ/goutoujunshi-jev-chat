@@ -5,7 +5,7 @@ from Foundation import NSMakeRect
 from overlay import ACCENT, INK, MUTED, button, color, label
 from settings_ui import field, popup, show_window
 from ranking import EXPLANATION
-from core import intent_confidence_label, INTENT_CONFIDENCE_NOTE
+from core import intent_confidence_label, INTENT_CONFIDENCE_NOTE, format_strategy_decision
 
 
 def surface(parent, frame, tint=0xFFFFFF):
@@ -172,10 +172,10 @@ class AnalysisScreen:
                 blocks.append(('reply', title, body, 0xE7EFE9 if i == 0 else 0xFFFFFF, 18, height, detail, i))
             if not advice['candidates']:
                 block('本轮不提供候选', '按上方军师建议行动，无需为了延续话题勉强回复。')
-            decision = advice.get('jev_decision')
+            decision = advice.get('strategy_decision') or advice.get('jev_decision')
             block('如何理解意图把握', INTENT_CONFIDENCE_NOTE, size=12)
             if decision:
-                block('策略判断依据', f"Jev 选择「{decision['strategy']}」，策略置信度 {decision['confidence']:.0%}。\n这反映模型对策略选择的判断，不是回复成功率，也不是候选推荐权重。", size=12)
+                block('策略判断依据', format_strategy_decision(decision), size=12)
         height = max(self.viewport, sum(b[5]+12 for b in blocks))
         doc = A.NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
         y = height

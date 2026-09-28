@@ -8,11 +8,12 @@ from core import Snapshot
 from jev import JevConfig
 from pipeline import analyze_snapshot
 from experience import ReplyPreferences, empty_profile, profile_context
+import preferences
 
 
 def main():
     try:
-        reply = Config.from_env()
+        reply = Config.for_preferences(preferences.load())
         jev = JevConfig.optional()
         if jev is None:
             raise ValueError("完整链路测试需要配置 Jev")

@@ -18,6 +18,33 @@ def intent_confidence_label(advice):
     return '判断把握 · 暂无法判断' if value is None else f'判断把握 · {value:.0%}（模型估计）'
 
 
+def format_strategy_decision(decision):
+    source = 'Jev' if decision['model'].startswith('jev-') else 'DeepSeek'
+    name = decision['strategy']
+    method = decision.get('method')
+    if method == 'deepseek_logprobs':
+        weights = decision['probabilities']
+        ordered = sorted(STRATEGIES, key=lambda item: -weights[item])
+        def weight_text(value):
+            return '<0.1%' if 0 < value < .001 else f'{value:.1%}'
+        text = (f'{source} 选择「{name}」；策略选择权重 {decision["confidence"]:.1%}。\n'
+                '七策略相对权重：' + ' · '.join(f'{item} {weight_text(weights[item])}' for item in ordered) +
+                '\n来自三次标签轮换的首 token 概率，未经统计校准；不是回复成功率。')
+    elif method == 'deepseek_self_report':
+        confidence = decision.get('confidence')
+        estimate = (f'模型自评把握 {confidence:.0%}，未经统计校准；不是回复成功率。'
+                    if confidence is not None else '模型自评把握暂不可用；不是回复成功率。')
+        text = (f'{source} 选择「{name}」；策略 token 权重暂不可用。\n'
+                + estimate)
+    else:
+        text = (f'{source} 选择「{name}」；策略置信度 {decision["confidence"]:.0%}。\n'
+                '这是模型对策略选择的判断，不是回复成功率，也不是候选推荐权重。')
+    facts = decision.get('evidence', {}).get('facts', [])
+    if facts:
+        text += '\n判断依据：' + '；'.join(facts)
+    return text
+
+
 @dataclass(frozen=True)
 class Snapshot:
     title: str
@@ -191,10 +218,9 @@ def format_advice(data):
     chunks = [data["support"], f"首选 · {data['strategy']}\n{data['recommendation']}"]
     chunks.append('对方可能的意图\n' + data.get('intent', '；'.join(data['hypotheses']) or '证据不足，暂无法判断'))
     chunks.append(intent_confidence_label(data) + '\n' + INTENT_CONFIDENCE_NOTE)
-    if data.get("jev_decision"):
-        decision = data["jev_decision"]
-        chunks.append(f"策略来源：TypeSafe {decision['model']} · {decision['strategy']}\n"
-                      f"模型置信度：{decision['confidence']:.2f}（不是回复成功率）")
+    decision = data.get('strategy_decision') or data.get('jev_decision')
+    if decision:
+        chunks.append('策略来源：' + decision['model'] + '\n' + format_strategy_decision(decision))
     for key, label in (("facts", "已知事实"), ("hypotheses", "合理推测"), ("unknowns", "仍未知")):
         if data[key]:
             chunks.append(label + "\n" + "\n".join("• " + s for s in data[key]))
@@ -231,9 +257,9 @@ class Session:
 
 
 def assert_fill_target(original, current):
-    if original.source not in ("ocr", "deepseek_ocr") or not original.title or not original.window_id:
+    if original.source not in ("ocr", "deepseek_ocr", "openrouter_ocr") or not original.title or not original.window_id:
         raise ValueError("会话未可靠识别，请使用复制并自行核对接收人")
-    if original.source == 'deepseek_ocr' and original.title in ('微信', 'WeChat'):
-        raise ValueError('DeepSeek 未可靠识别会话名，请使用复制并自行核对接收人')
+    if original.source in ('deepseek_ocr', 'openrouter_ocr') and original.title in ('微信', 'WeChat'):
+        raise ValueError('识图模型未可靠识别会话名，请使用复制并自行核对接收人')
     if original.identity != current.identity:
         raise ValueError("微信会话或消息已变化，请重新读取并分析后再填入")

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations' / 'j
 
 from client import Config
 from core import Snapshot, assert_fill_target, from_capture
-from cloud_ocr import deepseek_config, parse_transcription, read_conversation
+from cloud_ocr import deepseek_config, openrouter_config, parse_transcription, read_conversation
 import cloud_ocr
 
 
@@ -28,6 +28,14 @@ class CloudOcrTests(unittest.TestCase):
             self.assertEqual((selected.base, selected.model, selected.key),
                              ('https://api.deepseek.com', 'deepseek-flash', 'own-secret'))
 
+    def test_openrouter_ocr_uses_its_own_key_and_model(self):
+        with patch('cloud_ocr.Config.openrouter', return_value=Config(
+                'https://openrouter.ai/api/v1', 'openrouter/free', 'or-test-key')) as factory:
+            config = openrouter_config('openrouter/free')
+        factory.assert_called_once_with('openrouter/free')
+        self.assertEqual((config.base, config.model, config.key),
+                         ('https://openrouter.ai/api/v1', 'openrouter/free', 'or-test-key'))
+
     def test_cloud_capture_sends_only_cropped_image_and_caches_unchanged_periodic_frame(self):
         answer = json.dumps({'chat_title': '小 A', 'messages': [
             {'side': 'them', 'text': '今天有点忙', 'uncertain': False}]})
@@ -44,6 +52,24 @@ class CloudOcrTests(unittest.TestCase):
         self.assertTrue(image['image_url']['url'].startswith('data:image/png;base64,'))
         self.assertNotIn('fake cropped png', str(messages))
         self.assertEqual(first['messages'][0].side, 'them')
+
+    def test_switching_ocr_provider_invalidates_image_cache(self):
+        answer = json.dumps({'chat_title': '小 A', 'messages': [
+            {'side': 'them', 'text': '今天有点忙', 'uncertain': False}]})
+        router = Config('https://openrouter.ai/api/v1', 'openrouter/free', 'or-test-key')
+        with patch('cloud_ocr._capture_window', return_value=(self.window, b'same image')), \
+                patch('cloud_ocr.complete', return_value=answer) as complete:
+            read_conversation(self.config, reuse_unchanged=True)
+            read_conversation(router, reuse_unchanged=True)
+        self.assertEqual(complete.call_count, 2)
+        self.assertEqual(complete.call_args.kwargs, {'json_mode': True})
+
+    def test_openrouter_unsupported_image_model_has_actionable_error(self):
+        router = Config('https://openrouter.ai/api/v1', 'text-only', 'or-test-key')
+        with patch('cloud_ocr._capture_window', return_value=(self.window, b'image')), \
+                patch('cloud_ocr.complete', side_effect=ValueError('模型接口 HTTP 400；请检查配置和额度')):
+            with self.assertRaisesRegex(ValueError, '支持图片和 JSON'):
+                read_conversation(router)
 
     def test_uncertain_and_unknown_lines_require_review(self):
         result = parse_transcription(json.dumps({'chat_title': 'A\nB', 'messages': [

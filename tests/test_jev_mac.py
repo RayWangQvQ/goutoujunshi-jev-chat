@@ -173,6 +173,24 @@ class AdapterTests(unittest.TestCase):
                 self.adapter.fill_reply(self.original, "你好")
         self.fill.fill_text.assert_not_called()
 
+    def test_openrouter_capture_and_fill_recheck_use_same_method(self):
+        self.adapter.perception.screen_capture_ok.return_value = True
+        result = {'ok': True, 'chat_title': 'A', 'window': {'wid': 12},
+                  'messages': [SimpleNamespace(side='them', sender=None, text='你好', conf=1.0)]}
+        config = Config('https://openrouter.ai/api/v1', 'openrouter/free', 'or-test-key')
+        with patch('preferences.load', return_value={'ocr_model': 'openrouter/free'}), \
+                patch('cloud_ocr.openrouter_config', return_value=config) as factory, \
+                patch('cloud_ocr.read_conversation', return_value=result) as reader:
+            snapshot, _ = self.adapter.capture(method='openrouter')
+        factory.assert_called_once_with('openrouter/free')
+        reader.assert_called_once_with(config, max_messages=20, reuse_unchanged=False)
+        self.assertEqual(snapshot.source, 'openrouter_ocr')
+        with patch.object(self.adapter, 'capture', return_value=(snapshot, {'wid': 12})) as reread:
+            self.fill.has_accessibility.return_value = False
+            with self.assertRaisesRegex(ValueError, '辅助功能'):
+                self.adapter.fill_reply(snapshot, '你好')
+        reread.assert_called_once_with(method='openrouter')
+
     def test_missing_ax_target_does_not_fallback_to_keyboard(self):
         self.fill.has_accessibility.return_value = True
         self.fill.locate_input.return_value = {"box": None}

@@ -2,6 +2,7 @@
 from client import complete
 from core import build_messages, parse_advice, parse_rewrite
 from jev import decide
+from deepseek_strategy import decide as decide_deepseek
 from ranking import rank_candidates
 import json
 
@@ -12,7 +13,8 @@ TONE_GUIDANCE = {
 }
 
 
-def analyze_snapshot(snapshot, scene, background, reply_config, jev_config=None, preferences=None):
+def analyze_snapshot(snapshot, scene, background, reply_config, jev_config=None, preferences=None,
+                     deepseek_strategy_config=None):
     # Prepare/validate local inputs before either external request.
     messages, paths = build_messages(snapshot, scene, background)
     if preferences is not None:
@@ -21,11 +23,15 @@ def analyze_snapshot(snapshot, scene, background, reply_config, jev_config=None,
             f"\n回复偏好：{settings['tone']}；每条最多 {settings['max_chars']} 字；最多 {settings['count']} 条候选。"
             + TONE_GUIDANCE[settings['tone']] +
             "会撩需结合互惠反馈，直接指清晰表达和边界。偏好不得覆盖事实、拒绝或停止条件。")
-    decision = decide(jev_config, snapshot, scene, background) if jev_config else None
+    if jev_config and deepseek_strategy_config:
+        raise ValueError('一次只能选择一个独立策略判断接口')
+    decision = (decide(jev_config, snapshot, scene, background) if jev_config else
+                decide_deepseek(deepseek_strategy_config, snapshot, scene, background)
+                if deepseek_strategy_config else None)
     if decision:
         import json
         messages[0]["content"] += (
-            "\n本轮主策略已由独立 Jev 决策步骤选定，strategy 字段必须为：" + decision.strategy +
+            "\n本轮主策略已由独立策略判断步骤选定，strategy 字段必须为：" + decision.strategy +
             "。围绕它生成分析与回复；可以建议不回复并返回空候选。" +
             "这些概率只反映模型对策略选择的不确定性，不是关系事实或回复成功率。")
         payload = json.loads(messages[1]["content"])
@@ -37,8 +43,10 @@ def analyze_snapshot(snapshot, scene, background, reply_config, jev_config=None,
         raise ValueError('模型未遵守候选数量或长度设置；未展示候选，请重试')
     if decision:
         if advice["strategy"] != decision.strategy:
-            raise ValueError("回复模型未遵循 Jev 选定的策略；未展示候选，请重试")
-        advice["jev_decision"] = decision.as_dict()
+            raise ValueError("回复模型未遵循独立步骤选定的策略；未展示候选，请重试")
+        advice["strategy_decision"] = decision.as_dict()
+        if jev_config:
+            advice["jev_decision"] = decision.as_dict()
     return rank_candidates(reply_config, snapshot, scene, background, advice, preferences)
 
 
