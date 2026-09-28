@@ -63,6 +63,9 @@ jobs:
       - run: python -m compileall -q app core main.py
       - run: python -m core.draft
       - run: python -c "import app.overlay, app.review, app.trend_ui, app.cloud_ocr, core.experience"
+      - run: python check_ui.py
+        env:
+          QT_QPA_PLATFORM: offscreen
       - run: pyinstaller --noconfirm --clean jev.spec
       - name: Create Windows ZIP
         shell: pwsh
