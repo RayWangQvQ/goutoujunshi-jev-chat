@@ -26,6 +26,22 @@ import java.util.concurrent.RejectedExecutionException
 
 internal fun shouldIgnoreAccessibilityEvents(reviewPending: Boolean): Boolean = reviewPending
 
+internal enum class ReviewConfirmationState {
+    WAIT_FOR_CHAT_WINDOW,
+    CHAT_CURRENT,
+    CHAT_CHANGED
+}
+
+internal fun reviewConfirmationState(
+    livePackage: String?,
+    ownPackage: String,
+    expectedChatPackage: String
+): ReviewConfirmationState = when (livePackage) {
+    null, ownPackage -> ReviewConfirmationState.WAIT_FOR_CHAT_WINDOW
+    expectedChatPackage -> ReviewConfirmationState.CHAT_CURRENT
+    else -> ReviewConfirmationState.CHAT_CHANGED
+}
+
 /**
  * The live capture service (registered under a disguised class name so WeChat
  * exposes its node tree — see the disguised subclass). It reads whichever
@@ -611,22 +627,50 @@ open class ChatCaptureService : AccessibilityService() {
         if (reviewPending || analyzing || !snapshotIsCurrent(snapshot, pkg)) return
         reviewPending = true
         overlay?.showReview(snapshot, onConfirm = { confirmed ->
-            reviewPending = false
-            val liveRoot = rootInActiveWindow
-            if (liveRoot?.packageName?.toString() != pkg) {
-                overlay?.showError("聊天应用已切换，请重新识别后再分析")
-            } else {
-                currentSnapshot = confirmed
-                pendingSnapshot = confirmed
-                main.removeCallbacks(debounce)
-                runAnalysis()
-            }
+            overlay?.showLoading()
+            completeReviewConfirmation(confirmed, pkg)
         }, onCancel = {
             reviewPending = false
             pendingSnapshot = null
             overlay?.resetForNewConversation()
             overlay?.showIdle(snapshot.title)
         })
+    }
+
+    /**
+     * Dropping focus from the editable review overlay updates
+     * rootInActiveWindow asynchronously. Wait for the original chat window
+     * before validating it and starting analysis.
+     */
+    private fun completeReviewConfirmation(
+        confirmed: ChatSnapshot,
+        pkg: String,
+        attempt: Int = 0
+    ) {
+        val livePkg = rootInActiveWindow?.packageName?.toString()
+        when (reviewConfirmationState(livePkg, packageName, pkg)) {
+            ReviewConfirmationState.WAIT_FOR_CHAT_WINDOW -> {
+                if (attempt < REVIEW_FOCUS_RETRIES) {
+                    main.postDelayed({
+                        completeReviewConfirmation(confirmed, pkg, attempt + 1)
+                    }, REVIEW_FOCUS_RETRY_MS)
+                } else {
+                    reviewPending = false
+                    overlay?.showError("无法重新确认聊天窗口，请关闭核对页后重试")
+                }
+            }
+            ReviewConfirmationState.CHAT_CHANGED -> {
+                reviewPending = false
+                overlay?.showError("聊天应用已切换，请重新识别后再分析")
+            }
+            ReviewConfirmationState.CHAT_CURRENT -> {
+                reviewPending = false
+                currentSnapshot = confirmed
+                pendingSnapshot = confirmed
+                main.removeCallbacks(debounce)
+                runAnalysis()
+            }
+        }
     }
 
     /** Fill only a verified, still-current chat input box (never sends). */
@@ -733,6 +777,8 @@ open class ChatCaptureService : AccessibilityService() {
     companion object {
         private const val TAG = "JEVASSIST"
         private const val WECHAT_PACKAGE = "com.tencent.mm"
+        private const val REVIEW_FOCUS_RETRIES = 20
+        private const val REVIEW_FOCUS_RETRY_MS = 50L
 
         /** Whole-screen OCR keeps the middle: no action bar, no input area. */
         private const val TOP_CROP = 0.12f
