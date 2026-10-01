@@ -24,6 +24,12 @@ import com.jev.probe.overlay.OverlayController
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
+internal fun shouldHideOwnWindow(
+    foregroundPackage: String,
+    ownPackage: String,
+    reviewPending: Boolean
+): Boolean = foregroundPackage == ownPackage && !reviewPending
+
 /**
  * The live capture service (registered under a disguised class name so WeChat
  * exposes its node tree — see the disguised subclass). It reads whichever
@@ -201,7 +207,10 @@ open class ChatCaptureService : AccessibilityService() {
             val fg = rootInActiveWindow?.packageName?.toString()
             if (fg != null && fg !in adapters) {
                 foregroundPkg = fg
-                val drop = fg == packageName ||
+                // The editable transcript review temporarily makes our overlay
+                // focusable. Its window belongs to this package too, but hiding it
+                // here would dismiss the review as soon as it appears.
+                val drop = shouldHideOwnWindow(fg, packageName, reviewPending) ||
                     fg == WECHAT_PACKAGE ||
                     fg.contains("launcher", ignoreCase = true) ||
                     fg == "com.miui.home" ||
