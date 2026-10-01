@@ -24,11 +24,7 @@ import com.jev.probe.overlay.OverlayController
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
-internal fun shouldHideOwnWindow(
-    foregroundPackage: String,
-    ownPackage: String,
-    reviewPending: Boolean
-): Boolean = foregroundPackage == ownPackage && !reviewPending
+internal fun shouldIgnoreAccessibilityEvents(reviewPending: Boolean): Boolean = reviewPending
 
 /**
  * The live capture service (registered under a disguised class name so WeChat
@@ -191,6 +187,13 @@ open class ChatCaptureService : AccessibilityService() {
         if (!prefs.enabled) { main.post { overlay?.hide() }; return }
 
         val type = event.eventType
+        // showReview() makes the overlay focusable so its EditText can be
+        // corrected. That focus transition emits accessibility window events,
+        // while rootInActiveWindow may report either our overlay or the chat app
+        // underneath. Neither is a real navigation, so review/cancel must remain
+        // the sole owners of this panel until the user chooses one.
+        if (shouldIgnoreAccessibilityEvents(reviewPending)) return
+
         // Decide "did we leave the chat app" from the REAL active window, not the
         // event's package. The event package can be an IME (e.g. com.tencent.wetype)
         // or the status bar while the chat app is still foreground — keying off it
@@ -207,10 +210,7 @@ open class ChatCaptureService : AccessibilityService() {
             val fg = rootInActiveWindow?.packageName?.toString()
             if (fg != null && fg !in adapters) {
                 foregroundPkg = fg
-                // The editable transcript review temporarily makes our overlay
-                // focusable. Its window belongs to this package too, but hiding it
-                // here would dismiss the review as soon as it appears.
-                val drop = shouldHideOwnWindow(fg, packageName, reviewPending) ||
+                val drop = fg == packageName ||
                     fg == WECHAT_PACKAGE ||
                     fg.contains("launcher", ignoreCase = true) ||
                     fg == "com.miui.home" ||
